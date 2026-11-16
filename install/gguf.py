@@ -187,6 +187,159 @@ NORMAL_TOKEN = 1
 CONTROL_TOKEN = 3
 USER_DEFINED_TOKEN = 4
 UNUSED_TOKEN = 5
+# The byte atoms <0x00> to <0xFF>, which a byte-fallback BPE vocabulary's
+# pieces are (Gemma4's) and decoding's ByteFallback restores bytes from.
+BYTE_TOKEN = 6
+
+# The sizes every text architecture's configuration derives from its header.
+BASE_TEXT_FIELDS = {
+    "hidden_size": "embedding_length",
+    "max_position_embeddings": "context_length",
+    "num_attention_heads": "attention.head_count",
+    "num_key_value_heads": "attention.head_count_kv",
+    "head_dim": "attention.key_length",
+}
+# Gemma4's: the sliding layers' head width (attention.key_length_swa) is the
+# configuration's head_dim, and the global layers' fewer key-value heads, an
+# array the header holds of two values, gemma4_text_config names itself.
+GEMMA4_TEXT_FIELDS = {
+    "hidden_size": "embedding_length",
+    "max_position_embeddings": "context_length",
+    "num_attention_heads": "attention.head_count",
+    "head_dim": "attention.key_length_swa",
+}
+
+
+def gemma4_tokenizer_files(metadata):
+    """A Gemma4 GGUF's tokenizer files, from the vocabulary, merges and
+    special-token ids that Google's tokenizer.json itself derives from: a
+    byte-fallback BPE whose normalizer replaces a space with ▁, whose
+    pre-tokenizer splits at spaces and merges the right pieces with their
+    previous, whose decoders restore the spaces and the bytes, and whose
+    post-processor chains <bos> to every encoding where the header's
+    add_bos_token says it does (as Google's does)."""
+    from tokenizers import AddedToken, Regex, Tokenizer, decoders, normalizers
+    from tokenizers import models as token_models
+    from tokenizers import pre_tokenizers, processors
+
+    tokens = metadata.require("tokenizer.ggml.tokens", list)
+    types = metadata.require("tokenizer.ggml.token_type", list)
+    merges = metadata.require("tokenizer.ggml.merges", list)
+    if (
+        not tokens
+        or not all(isinstance(t, str) and t for t in tokens)
+        or len(set(tokens)) != len(tokens)
+        or len(types) != len(tokens)
+        or any(
+            type(t) is not int
+            or t
+            not in (
+                NORMAL_TOKEN,
+                CONTROL_TOKEN,
+                USER_DEFINED_TOKEN,
+                UNUSED_TOKEN,
+                BYTE_TOKEN,
+            )
+            for t in types
+        )
+    ):
+        raise ModelError("invalid or unsupported GGUF tokenizer vocabulary")
+    if not set("<0x%02X>" % value for value in range(256)) <= set(tokens):
+        raise ModelError("GGUF byte-fallback tokenizer is missing byte tokens")
+    if metadata.values.get("tokenizer.ggml.add_space_prefix", 0) not in (0, False):
+        raise ModelError(
+            "GGUF automatic space prefix is unsupported: "
+            "tokenizer.ggml.add_space_prefix"
+        )
+    pairs = []
+    for merge in merges:
+        if not isinstance(merge, str) or len(parts := merge.split(" ")) != 2:
+            raise ModelError("invalid GGUF BPE merge")
+        pairs.append(tuple(parts))
+    try:
+        backend = Tokenizer(
+            token_models.BPE(
+                {t: i for i, t in enumerate(tokens)},
+                pairs,
+                fuse_unk=True,
+                byte_fallback=True,
+            )
+        )
+    except Exception as error:
+        raise ModelError("invalid GGUF BPE vocabulary or merges") from error
+    backend.normalizer = normalizers.Replace(" ", "▁")
+    backend.pre_tokenizer = pre_tokenizers.Split(
+        Regex(" "), behavior="merged_with_previous"
+    )
+    backend.decoder = decoders.Sequence(
+        [
+            decoders.Replace("▁", " "),
+            decoders.ByteFallback(),
+            decoders.Fuse(),
+        ]
+    )
+    if metadata.values.get("tokenizer.ggml.add_bos_token", True) is not False:
+        bos = "<bos>"
+        if tokens[metadata.require("tokenizer.ggml.bos_token_id", int)] != bos:
+            bos = tokens[metadata.require("tokenizer.ggml.bos_token_id", int)]
+        backend.post_processor = processors.TemplateProcessing(
+            single=bos + " $A",
+            pair=bos + " $A $B:1",
+            special_tokens=[(bos, metadata.require("tokenizer.ggml.bos_token_id", int))],
+        )
+    # The index of each added token, and whether it is special.
+    added = {
+        index: kind == CONTROL_TOKEN
+        for index, kind in enumerate(types)
+        if kind in (CONTROL_TOKEN, USER_DEFINED_TOKEN)
+    }
+    backend.add_tokens(
+        [
+            AddedToken(tokens[index], normalized=False, special=is_special)
+            for index, is_special in added.items()
+        ]
+    )
+
+    def special_token(name, *, optional=False):
+        key = "tokenizer.ggml." + name + "_token_id"
+        if optional and key not in metadata.values:
+            return None
+        index = metadata.require(key, int)
+        if not 0 <= index < len(tokens) or types[index] != CONTROL_TOKEN:
+            raise ModelError("invalid GGUF special token: " + key)
+        return tokens[index]
+
+    template = metadata.require("tokenizer.chat_template", str)
+    if not template.strip():
+        raise ModelError("GGUF chat template is empty")
+    config = {
+        "tokenizer_class": "GemmaTokenizer",
+        "model_max_length": metadata.positive(
+            text_architecture(metadata) + ".context_length"
+        ),
+        "clean_up_tokenization_spaces": False,
+        "bos_token": special_token("bos", optional=True),
+        "eos_token": special_token("eos"),
+        "mask_token": special_token("mask", optional=True),
+        "unk_token": special_token("unknown", optional=True),
+        "pad_token": special_token("padding", optional=True),
+        "added_tokens_decoder": {
+            str(index): {
+                "content": tokens[index],
+                "special": is_special,
+                "normalized": False,
+                "single_word": False,
+                "lstrip": False,
+                "rstrip": False,
+            }
+            for index, is_special in added.items()
+        },
+    }
+    return {
+        "tokenizer/tokenizer.json": backend.to_str().encode(),
+        "tokenizer/tokenizer_config.json": models.json_bytes(config),
+        "tokenizer/chat_template.jinja": template.encode(),
+    }
 
 
 def derived_files(target, vision=None):
@@ -209,6 +362,8 @@ def tokenizer_files(metadata):
     )
     from tokenizers import models as token_models
 
+    if metadata.require("tokenizer.ggml.model", str) == "gemma4":
+        return gemma4_tokenizer_files(metadata)
     if (
         metadata.require("tokenizer.ggml.model", str) != "gpt2"
         or (
@@ -337,13 +492,7 @@ def model_config(metadata, vision=None):
     text_config, with its vision tower's beside it, or Flint's flat."""
     arch = text_architecture(metadata)
     architecture = ARCHITECTURES[arch]
-    fields = {
-        "hidden_size": "embedding_length",
-        "max_position_embeddings": "context_length",
-        "num_attention_heads": "attention.head_count",
-        "num_key_value_heads": "attention.head_count_kv",
-        "head_dim": "attention.key_length",
-    }
+    fields = architecture.fields or BASE_TEXT_FIELDS
     if architecture.moe:
         # The routed experts, which a pruned release keeps fewer of than its
         # family; the engine plans, sizes and loads them by this count.
@@ -483,6 +632,52 @@ def flint_text_config(metadata, arch):
     }
 
 
+def gemma4_text_config(metadata, arch):
+    """What Gemma4's config.json states beyond the sizes every architecture's
+    does, from its header: the global attention layers' key-value heads and
+    head width (attention.key_length) against the sliding layers' — the
+    header's attention.head_count_kv holds both classes', theirs and the
+    sliding layers' — their RoPE parameters and the sliding window and its
+    layers (attention.sliding_window_pattern), and the final logit
+    softcapping. The engine's model check holds each to the family's."""
+    layers = loaded_layers(metadata, arch)
+    kv_heads = metadata.require(arch + ".attention.head_count_kv", list)
+    if (
+        len(kv_heads) != layers
+        or any(type(count) is not int or count <= 0 for count in kv_heads)
+        or len(set(kv_heads)) != 2
+    ):
+        raise ModelError(
+            "invalid GGUF metadata: " + arch + ".attention.head_count_kv; "
+            "expected the sliding and the global layers' two head counts, one "
+            "per layer"
+        )
+    return {
+        "intermediate_size": metadata.positive(arch + ".feed_forward_length"),
+        "num_key_value_heads": max(kv_heads),
+        "num_global_key_value_heads": min(kv_heads),
+        "global_head_dim": metadata.positive(arch + ".attention.key_length"),
+        "sliding_window": metadata.positive(arch + ".attention.sliding_window"),
+        "layer_types": [
+            "sliding_attention" if slides else "full_attention"
+            for slides in layer_pattern(metadata, arch, "attention.sliding_window_pattern")
+        ],
+        "rms_norm_eps": metadata.require(
+            arch + ".attention.layer_norm_rms_epsilon", float
+        ),
+        "rope_theta": metadata.require(arch + ".rope.freq_base", float),
+        "rope_theta_swa": metadata.require(arch + ".rope.freq_base_swa", float),
+        "rope_dimension_count": metadata.positive(arch + ".rope.dimension_count"),
+        "rope_dimension_count_swa": metadata.positive(
+            arch + ".rope.dimension_count_swa"
+        ),
+        "final_logit_softcapping": metadata.require(
+            arch + ".final_logit_softcapping", float
+        ),
+        "eos_token_id": [metadata.require("tokenizer.ggml.eos_token_id", int)],
+    }
+
+
 def vision_config(vision):
     if (
         vision.require("general.architecture", str) != "clip"
@@ -603,6 +798,9 @@ class Architecture:
     # Whether its configuration is flat, the text model's at its top, as
     # Flint's is; otherwise under text_config, as Qwen's is.
     flat: bool = False
+    # The header keys the sizes model_config derives each name, in place of
+    # BASE_TEXT_FIELDS.
+    fields: dict[str, str] | None = None
 
 
 # The GGUF text architectures Splash serves, by general.architecture.
@@ -616,5 +814,11 @@ ARCHITECTURES = {
         leading_dense=True,
         text_config=flint_text_config,
         flat=True,
+    ),
+    "gemma4": Architecture(
+        "gemma4_text",
+        moe=False,
+        fields=GEMMA4_TEXT_FIELDS,
+        text_config=gemma4_text_config,
     ),
 }
