@@ -14,7 +14,7 @@ from urllib.parse import unquote
 from jsonschema.exceptions import SchemaError
 from llguidance import LLMatcher
 
-from .chat_format import THINK_END, TOOL_CALL_CLOSE, TOOL_CALL_OPEN
+from .chat_format import THINK_END
 from .errors import APIError
 from .lru import LRUCache, memoized
 from .schema_validation import (
@@ -1208,8 +1208,8 @@ def tool_grammar(policy, thinking, response_schema=None, *, chat_format):
                 {"name": arguments, "lark_grammar": strict_arguments[name]}
             )
         calls.append(
-            f"call_{index}: {TOOL_CALL_OPEN} {_function_opening(syntax, name)} "
-            f"@{arguments}{closing} {TOOL_CALL_CLOSE}"
+            f"call_{index}: {syntax.open_tag} {_function_opening(syntax, name)} "
+            f"@{arguments}{closing} {syntax.close_tag}"
         )
     call = "(" + " | ".join(f"call_{index}" for index in range(len(calls))) + ")"
     if not calls:
@@ -1238,7 +1238,7 @@ def tool_grammar(policy, thinking, response_schema=None, *, chat_format):
         [
             *calls,
             WHITESPACE_RULE,
-            _text_rule(TOOL_CALL_OPEN, THINK_END),
+            _text_rule(syntax.open_tag, THINK_END),
         ]
     )
     side_grammars.insert(

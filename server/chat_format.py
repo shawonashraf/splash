@@ -48,11 +48,21 @@ class ToolCallSyntax:
     # TOOL_CALL_OPEN and TOOL_CALL_CLOSE are in every family's, which grammars
     # then write as that token; otherwise they write the tags as text.
     tags_are_tokens: bool
+    # The tags a call opens and closes with: the shared TOOL_CALL_OPEN and
+    # TOOL_CALL_CLOSE, unless the family's template spells others, as
+    # Gemma4's frame its DSL. The open is one native token the format names
+    # (its call_open_id); the close the projector reads and the grammars
+    # write.
+    open_tag: str = TOOL_CALL_OPEN
+    close_tag: str = TOOL_CALL_CLOSE
+    # The text between arguments (Gemma4's comma); empty where a tag opens
+    # each argument (Qwen's and Flint's).
+    argument_separator: str = ""
 
     @property
     def call_open(self):
         """The text a call opens with, up to its function's name."""
-        return TOOL_CALL_OPEN + self.name_open
+        return self.open_tag + self.name_open
 
     def function_opening(self, name):
         """What follows TOOL_CALL_OPEN in a call of tool `name`, up to its
@@ -68,12 +78,18 @@ class ToolCallSyntax:
 
     @property
     def argument_tags(self):
-        """The tags that may follow an argument: the next one's opening, the
-        arguments' close without the space its layout sets around it, and
-        the call's close a model may write without the arguments'."""
+        """The tags that may follow an argument: the next one's opening or
+        the separator between arguments, the arguments' close without the
+        space its layout sets around it, and the call's close a model may
+        write without the arguments'."""
         return tuple(
             tag
-            for tag in (self.key_open, self.arguments_close.strip(), TOOL_CALL_CLOSE)
+            for tag in (
+                self.key_open,
+                self.argument_separator,
+                self.arguments_close.strip(),
+                self.close_tag,
+            )
             if tag
         )
 
@@ -197,8 +213,11 @@ GEMMA_DSL = ToolCallSyntax(
     key_close=":",
     value_open='<|"|>',
     value_close='<|"|>',
-    arguments_close="}<tool_call|>",
+    arguments_close="}",
     tags_are_tokens=False,
+    open_tag='<|tool_call>',
+    close_tag='<tool_call|>',
+    argument_separator=",",
 )
 
 # Gemma4's (runtime/model/Gemma4.hpp): the turn end alone as the stop

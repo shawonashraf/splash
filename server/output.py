@@ -8,7 +8,7 @@ from jsonschema.exceptions import ValidationError
 from referencing.exceptions import Unresolvable
 
 from . import json_codec
-from .chat_format import THINK_END, THINK_START, TOOL_CALL_CLOSE
+from .chat_format import THINK_END, THINK_START
 from .errors import APIError
 from .schema_validation import SchemaEvaluationError
 from .tool_schema import (
@@ -303,6 +303,7 @@ class StreamingToolCallProjector:
         self.value_types = None
         self.value_streams = False
         self.value_started = False
+        self.bare_value = False
         self.value_parts = []
         self.content_fragments = []
         # How many content fragments the stream has published (the rest are
@@ -395,6 +396,7 @@ class StreamingToolCallProjector:
         # to convert.
         self.value_streams = not self.value_types or self.value_types == {"string"}
         self.value_started = False
+        self.bare_value = False
         self.value_parts = []
         if self.value_streams and self.parameter_name is not None:
             self._emit_argument(self._key(name) + '"', events)
@@ -503,20 +505,50 @@ class StreamingToolCallProjector:
                 self._begin_call(name, events)
                 continue
             if self.state == "arguments":
-                # Text between parameters is dropped, but for a tag it may
-                # begin.
                 tags = syntax.argument_tags
-                start, tag = self._next_tag(*tags)
-                if tag is None:
-                    self.pending = hold_partial(self.pending, *tags)[1]
-                    break
-                self.pending = self.pending[start + len(tag) :]
-                if tag == syntax.key_open:
-                    self.state = "parameter"
-                else:
+                if syntax.key_open:
+                    # Text between parameters is dropped, but for a tag it
+                    # may begin.
+                    start, tag = self._next_tag(*tags)
+                    if tag is None:
+                        self.pending = hold_partial(self.pending, *tags)[1]
+                        break
+                    self.pending = self.pending[start + len(tag) :]
+                    if tag == syntax.key_open:
+                        self.state = "parameter"
+                    else:
+                        self._finish_call(events)
+                        if tag == syntax.close_tag:
+                            self.state = "content"
+                    continue
+                # Bare keys (Gemma4's): the character that ended the name
+                # goes, each argument reads key: value from here, the
+                # separator between arguments dropped, and the arguments' or
+                # the call's close ends the call.
+                self.pending = self.pending.lstrip().removeprefix(
+                    syntax.name_close
+                )
+                closes = tuple(
+                    tag
+                    for tag in (syntax.arguments_close.strip(), syntax.close_tag)
+                    if tag
+                )
+                start, tag = self._next_tag(*closes)
+                if tag is not None and start == 0:
+                    self.pending = self.pending[len(tag) :]
                     self._finish_call(events)
-                    if tag == TOOL_CALL_CLOSE:
+                    if tag == syntax.close_tag:
                         self.state = "content"
+                    continue
+                if (
+                    syntax.argument_separator
+                    and self.pending.startswith(syntax.argument_separator)
+                ):
+                    self.pending = self.pending[len(syntax.argument_separator) :]
+                if hold_partial(self.pending, *closes)[1] == self.pending:
+                    # What may yet spell the close waits for it.
+                    break
+                self.state = "parameter"
                 continue
             if self.state == "parameter":
                 if (name := self._name(syntax.key_close)) is None:
@@ -524,14 +556,49 @@ class StreamingToolCallProjector:
                 self._begin_parameter(name, events)
                 continue
             if self.state == "value":
-                # Before the value starts, the start of the value_open the
-                # template sets before it waits for the rest.
+                # A bare value (Gemma4's numbers, booleans and lists), begun
+                # in pieces, ends where an argument or the call does: the
+                # framed values' ends spell only the quote it lies between.
+                if self.bare_value:
+                    ends = tuple(
+                        tag
+                        for tag in (
+                            syntax.argument_separator,
+                            syntax.arguments_close.strip(),
+                            syntax.close_tag,
+                        )
+                        if tag
+                    )
+                    start, tag = self._next_tag(*ends)
+                    if tag is not None:
+                        self._end_parameter(self.pending[:start], events)
+                        # A separator goes; a close stays for the arguments
+                        # to read.
+                        if tag == syntax.argument_separator:
+                            self.pending = self.pending[start + len(tag) :]
+                        else:
+                            self.pending = self.pending[start :]
+                        continue
+                    held = hold_partial(self.pending, *ends)[1]
+                    if held != self.pending:
+                        self._put_value(
+                            self.pending[: len(self.pending) - len(held)], events
+                        )
+                        self.pending = held
+                    break
+                # Before a framed value starts, the start of the value_open
+                # the template sets before it waits for the rest.
                 if (
                     not self.value_started
                     and len(self.pending) < len(syntax.value_open)
                     and syntax.value_open.startswith(self.pending)
                 ):
                     break
+                if not self.value_started and not self.pending.startswith(
+                    syntax.value_open
+                ):
+                    self.bare_value = True
+                    continue
                 start, tag = self._next_tag(*syntax.value_ends)
                 if tag is None:
                     held = hold_partial(self.pending, *syntax.value_ends)[1]
@@ -545,11 +612,11 @@ class StreamingToolCallProjector:
                 self.pending = self.pending[start + len(syntax.value_close) :]
                 continue
             if self.state == "closing":
-                # After </function>, the template closes the call's block.
+                # After the arguments, the template closes the call's block.
                 rest = self.pending.lstrip(NAME_SPACE)
-                if rest.startswith(TOOL_CALL_CLOSE):
-                    self.pending = rest[len(TOOL_CALL_CLOSE) :]
-                elif TOOL_CALL_CLOSE.startswith(rest):
+                if rest.startswith(syntax.close_tag):
+                    self.pending = rest[len(syntax.close_tag) :]
+                elif syntax.close_tag.startswith(rest):
                     break
                 self.state = "content"
         return events

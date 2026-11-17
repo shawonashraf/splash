@@ -69,6 +69,12 @@ class ModelFamily:
     # loads from the target repository unless --language-only. The models of
     # a family without one serve text only, whatever their repository holds.
     vision: bool = True
+    # The family's declared context window and the most it serves past it
+    # with YaRN, as its models' configurations state them. The engine's
+    # families command reports the same; this is the report when the engine
+    # binary predates the family's layout.
+    context_tokens: int = 0
+    max_context_tokens: int = 0
 
 
 FAMILIES = (
@@ -92,7 +98,13 @@ FAMILIES = (
     # Its vision tower waits for its SigLIP variant; text only, from a GGUF
     # (the engine's Gemma4 loads one only), until its draft trains.
     ModelFamily(
-        "Gemma4", "incoai/Gemma-4-31B-DFlash2", GEMMA, GEMMA_SAMPLING, vision=False
+        "Gemma4",
+        "incoai/Gemma-4-31B-DFlash2",
+        GEMMA,
+        GEMMA_SAMPLING,
+        vision=False,
+        context_tokens=262144,
+        max_context_tokens=1010000,
     ),
 )
 
@@ -123,15 +135,19 @@ def option_report(engine_facts):
     } | LAUNCHER_NEEDS
     report = {}
     for family in FAMILIES:
-        engine = engine_facts[family.name]
+        # A family the engine does not report (its binary predates the
+        # family's layout) serves nothing yet: every fact an option needs is
+        # its to lack, and its context is none.
+        engine = engine_facts.get(family.name, {})
         facts = engine | {
             "vision": family.vision,
             "reasoning_switch": family.chat_format.reasoning_switch,
         }
         report[family.name] = {
-            "unusable": [flag for flag, fact in needs.items() if not facts[fact]],
-            "context_tokens": engine["context_tokens"],
-            "max_context_tokens": engine["max_context_tokens"],
+            "unusable": [flag for flag, fact in needs.items() if not facts.get(fact)],
+            "context_tokens": engine.get("context_tokens") or family.context_tokens,
+            "max_context_tokens": engine.get("max_context_tokens")
+            or family.max_context_tokens,
         }
     return report
 

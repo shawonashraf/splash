@@ -30,7 +30,15 @@ from server import constraints, tool_schema
 from server import output as model_output
 from server import protocol as wire
 from server import server as api
-from server.chat_format import FLINT, GLM_ARGS, QWEN, QWEN_XML, ToolCallSyntax
+from server.chat_format import (
+    FLINT,
+    GEMMA,
+    GEMMA_DSL,
+    GLM_ARGS,
+    QWEN,
+    QWEN_XML,
+    ToolCallSyntax,
+)
 from server.chat_templates import NATIVE, ChatTemplates
 from server.dialects import scoring
 from server.errors import APIError
@@ -968,3 +976,148 @@ class ServedFamilyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def gemma_call(name, arguments):
+    """A call as Gemma4's template writes it: strings between the quote
+    tokens, other values bare."""
+    quote = chr(60) + '|"' + chr(124) + chr(62)
+    open_tag = chr(60) + "|tool_call" + chr(62)
+    close_tag = chr(60) + "tool_call|" + chr(62)
+    return (
+        open_tag + "call:" + name + "{"
+        + ",".join(
+            key + ":"
+            + (quote + value + quote if isinstance(value, str) else value)
+            for key, value in arguments.items()
+        )
+        + "}"
+        + close_tag
+    )
+
+
+class GemmaFormatTests(unittest.TestCase):
+    """Gemma4's output: the thought channel the model opens itself, and its
+    call DSL."""
+
+    def test_reasoning_is_the_thought_channel_the_output_starts_with(self):
+        call = gemma_call("weather", {"city": "Paris"})
+        channel_open = GEMMA.think_start
+        channel_close = GEMMA.think_end
+        for text, expected in (
+            (channel_open + "Plan." + channel_close + "\n\nAnswer", ("Plan.", "Answer")),
+            # A generation the engine cuts past its reasoning budget ends the
+            # channel without the line break.
+            (
+                channel_open + "Plan." + channel_close[1:] + "Answer",
+                ("Plan.", "Answer"),
+            ),
+            ("Answer" + channel_open + "late" + channel_close, ("", "Answer" + channel_open + "late" + channel_close)),
+            # A call's opening ends the reasoning and begins the answer.
+            (channel_open + "Plan." + call, ("Plan.", call)),
+            ("", ("", "")),
+        ):
+            for size in range(1, len(text) + 2):
+                with self.subTest(text=text, size=size):
+                    self.assertEqual(split(text, size, GEMMA)[:2], expected)
+
+    def test_a_call_is_read_from_the_dsl(self):
+        policy = tool_policy(
+            {
+                "weather": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                        "days": {"type": "integer"},
+                        "metric": {"type": "boolean"},
+                    },
+                    "required": ["city"],
+                    "additionalProperties": False,
+                }
+            }
+        )
+        for text, content, arguments in (
+            (
+                "Plan. " + gemma_call("weather", {"city": "Paris"}),
+                "Plan. ",
+                '{"city":"Paris"}',
+            ),
+            (
+                gemma_call(
+                    "weather", {"city": "Paris", "days": "3", "metric": "true"}
+                ),
+                "",
+                '{"city":"Paris","days":3,"metric":true}',
+            ),
+            (gemma_call("weather", {}), "", "{}"),
+        ):
+            for size in (None, 1, 5):
+                with self.subTest(text=text, size=size):
+                    read, calls, _ = project(
+                        text, policy, "x", syntax=GEMMA_DSL, size=size
+                    )
+                    self.assertEqual(read, content)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(calls[0]["function"]["name"], "weather")
+                    self.assertEqual(calls[0]["function"]["arguments"], arguments)
+
+    def test_without_tools_a_call_is_text(self):
+        text = gemma_call("weather", {"city": "Paris"})
+        content, calls, _ = project(text, None, "x", syntax=GEMMA_DSL)
+        self.assertEqual((content, calls), (text, []))
+
+    def test_its_channel_tokens_pass_the_tokenizer_contract(self):
+        tokenizer = gemma_tokenizer()
+        constraints.validate_tokenizer(tokenizer, GEMMA)
+        with self.assertRaisesRegex(
+            constraints.TokenizerContractError, "must begin the reasoning's open"
+        ):
+            constraints.validate_tokenizer(tokenizer, replace(GEMMA, think_start_id=99))
+        with self.assertRaisesRegex(
+            constraints.TokenizerContractError, "must end the reasoning's close"
+        ):
+            constraints.validate_tokenizer(tokenizer, replace(GEMMA, think_end_id=102))
+        with self.assertRaisesRegex(
+            constraints.TokenizerContractError, "as native token"
+        ):
+            constraints.validate_tokenizer(tokenizer, replace(GEMMA, call_open_id=47))
+
+
+def gemma_tokenizer():
+    """A tokenizer whose channel and call tags are the native tokens of
+    Gemma4's format, as its own adds them."""
+    quote = chr(60) + '|"' + chr(124) + chr(62)
+    specials = {
+        chr(60) + "|tool_call" + chr(62): 48,
+        chr(60) + "tool_call|" + chr(62): 49,
+        quote: 52,
+        chr(60) + "|channel" + chr(62): 100,
+        chr(60) + "channel|" + chr(62): 101,
+        chr(60) + "turn|" + chr(62): 106,
+    }
+    words = {"thought": 201, "\n": 202, "a": 203}
+    vocab = dict(specials)
+    vocab.update(words)
+
+    def encode(text, add_special_tokens=False):
+        ids, rest = [], text
+        while rest:
+            for tag, token_id in sorted(
+                specials.items(), key=lambda item: -len(item[0])
+            ):
+                if rest.startswith(tag):
+                    ids.append(token_id)
+                    rest = rest[len(tag):]
+                    break
+            else:
+                piece = rest[0]
+                if piece in words:
+                    ids.append(words[piece])
+                rest = rest[1:]
+        return ids
+
+    return SimpleNamespace(
+        get_vocab=lambda: vocab,
+        added_tokens_decoder={token_id: None for token_id in specials.values()},
+        encode=encode,
+    )

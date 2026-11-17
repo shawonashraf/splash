@@ -24,6 +24,17 @@ UNUSABLE = {
     "Qwen3.6-35B-A3B": {"--ple-memory", "--sparse-kv-memory", "--disable-ane"},
     "Qwen3.5-122B-A10B": {"--ple-memory", "--sparse-kv-memory", "--disable-ane"},
     "Qwen3.8-Flash-Next": {"--disable-ane"},
+    # The engine binary predates Gemma4's layout: no fact an option needs.
+    "Gemma4": {
+        "--disable-ane",
+        "--expert-memory",
+        "--language-only",
+        "--max-image-pixels",
+        "--ple-memory",
+        "--sparse-kv-memory",
+        "--state-format",
+        "--verify-rows",
+    },
     "Flint": {
         "--language-only",
         "--state-format",

@@ -11,7 +11,6 @@ from llguidance.numpy import (
     fill_next_token_bitmask_par_with_draft_tokens,
 )
 
-from .chat_format import TOOL_CALL_OPEN
 from .errors import APIError, ConstraintError
 from .lru import LRUCache
 
@@ -115,13 +114,14 @@ def validate_tokenizer(tokenizer, chat_format):
     each stop text one token (check_capabilities checks which stop tokens,
     once the engine names them)."""
     vocabulary = tokenizer.get_vocab()
+    open_tag = chat_format.call_syntax.open_tag
     if (
-        vocabulary.get(TOOL_CALL_OPEN) != chat_format.call_open_id
-        or tokenizer.encode(TOOL_CALL_OPEN, add_special_tokens=False)
+        vocabulary.get(open_tag) != chat_format.call_open_id
+        or tokenizer.encode(open_tag, add_special_tokens=False)
         != [chat_format.call_open_id]
     ):
         raise TokenizerContractError(
-            f"tokenizer must encode {TOOL_CALL_OPEN!r} as native token "
+            f"tokenizer must encode {open_tag!r} as native token "
             f"{chat_format.call_open_id}"
         )
     added = set(tokenizer.added_tokens_decoder)
