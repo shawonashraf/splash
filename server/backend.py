@@ -14,7 +14,7 @@ from tokenizers.decoders import DecodeStream
 from . import json_codec, supervision
 from . import protocol as wire
 from . import runtime as engine_runtime
-from .chat_format import THINK_END, ChatFormat
+from .chat_format import ChatFormat
 from .constraints import TokenConstraint
 from .diagnostics import print_status
 from .errors import APIError, ConstraintError
@@ -53,7 +53,7 @@ def thinking_end_tokens(tokenizer, text, chat_format):
         or not tokenizer.added_tokens_decoder.keys().isdisjoint(tokens[:-1])
     ):
         raise ThinkingEndError(
-            f"the thinking end {text!r} must end with {THINK_END} and hold no "
+            f"the thinking end {text!r} must end with {chat_format.think_end} and hold no "
             "other special token"
         )
     if len(tokens) > wire.MAX_THINKING_END_TOKENS:
@@ -272,10 +272,23 @@ class CallbackStreamer:
             return 0
         if thinking:
             start = 0
-        elif chat_format.think_start_id is not None and self.token_ids[:1] == [
-            chat_format.think_start_id
-        ]:
+        elif chat_format.think_start_id is not None:
+            # The model's own opening of the reasoning, as its tokens (the
+            # generic families' one; Gemma4's three): the shortest prefix of
+            # tokens whose text is the opening. Token-by-token decode and
+            # concatenation match the opening's text for its own tokens.
+            text = self.tokenizer.decode(self.token_ids)
+            if not text.startswith(chat_format.think_start):
+                return 0
             start = 1
+            acc = ""
+            for token in self.token_ids:
+                acc += self.tokenizer.decode([token])
+                if acc == chat_format.think_start:
+                    break
+                if len(acc) >= len(chat_format.think_start):
+                    break
+                start += 1
         else:
             return 0
         calls_end = tool_calls and chat_format.calls_end_reasoning

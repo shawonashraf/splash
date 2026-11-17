@@ -13,8 +13,12 @@ launcher through serve_options."""
 
 from dataclasses import dataclass
 
-# The tags every family's template frames reasoning and calls with, each one
-# token of its tokenizer: a think block, and a call's opening and close.
+# The think tags of the families whose template frames reasoning with the
+# generic block, which Qwen's and Flint's do, each one token of its
+# tokenizer. A family whose think tags differ spells them in its format
+# (Gemma4's thought channel does), and every piece of the machinery that
+# reads a family's output takes the tags from the format it reads for,
+# never these constants.
 THINK_START = "<think>"
 THINK_END = "</think>"
 TOOL_CALL_OPEN = "<tool_call>"
@@ -131,23 +135,24 @@ class ChatFormat:
     # The template's placeholder for one image, one token, which the server
     # widens to the image's tokens; None for a template without one.
     image_pad: str | None
-
-    @property
-    def reasoning_switch(self):
-        """Whether a request turns the model's reasoning on and off, its
-        effort or enable_thinking opening the generation prompt's think block
-        or leaving it out; a model that opens its reasoning itself decides
-        each turn, whatever the request says."""
-        return self.think_start_id is None
-
-    @property
-    def calls_end_reasoning(self):
-        """Whether a call's opening also ends the reasoning where a call may
-        follow. A Qwen model may call a tool in the think block its
-        generation prompt opened, without closing it; a model that opens its
-        reasoning itself closes it before it calls one, so there a call's
-        opening is reasoning, as Flint's own parser reads it."""
-        return self.think_start_id is None
+    # The texts a family's output frames its reasoning with: its opening,
+    # which a model left to reason with writes, and its close, which ends
+    # it. The generic THINK_START and THINK_END, unless the family names
+    # its own.
+    think_start: str = THINK_START
+    think_end: str = THINK_END
+    # Whether a request turns the model's reasoning on and off, its effort
+    # or enable_thinking opening the generation prompt's think block or
+    # leaving it out (Qwen's and Gemma4's); a model that opens its
+    # reasoning itself decides each turn, whatever the request says
+    # (Flint's).
+    reasoning_switch: bool = True
+    # Whether a call's opening also ends the reasoning where a call may
+    # follow. A Qwen or Gemma4 model may call a tool in the think block
+    # its generation prompt opened, without closing it; a model that opens
+    # its reasoning itself closes it before it calls one, so there a
+    # call's opening is reasoning, as Flint's own parser reads it.
+    calls_end_reasoning: bool = True
 
 
 # The Qwen families' (Qwen3_8.hpp, Qwen3_6Moe.hpp, Qwen4Exp.hpp):
@@ -172,6 +177,42 @@ FLINT = ChatFormat(
     think_start_id=150006,
     call_open_id=150010,
     call_syntax=GLM_ARGS,
+    # Its own decision each turn, not one a request says.
+    reasoning_switch=False,
+    calls_end_reasoning=False,
     message_boundary="<|assistant|>",
     image_pad=None,
+)
+
+# Gemma4's call DSL, as its template lays a call out: TOOL_CALL_OPEN, the
+# function's name after "call:", an argument per "key:" then its value,
+# and the calls' close after the arguments. A value sits between the
+# GEMMA_QUOTE tokens, a string's text between them; the tags are text
+# (constraints checks the format's own token tags against the tokenizer
+# separately).
+GEMMA_DSL = ToolCallSyntax(
+    name_open="call:",
+    name_close="{",
+    key_open="",
+    key_close=":",
+    value_open='<|"|>',
+    value_close='<|"|>',
+    arguments_close="}<tool_call|>",
+    tags_are_tokens=False,
+)
+
+# Gemma4's (runtime/model/Gemma4.hpp): the turn end alone as the stop
+# token, a reasoning the model opens itself in its thought channel, which
+# a generation prompt closes empty where the request does not think, and
+# the turn end the template writes after every turn, the tokenizer's EOS.
+GEMMA = ChatFormat(
+    stop_tokens=("<turn|>",),
+    think_end_id=101,
+    think_start_id=100,
+    call_open_id=48,
+    call_syntax=GEMMA_DSL,
+    message_boundary="<turn|>",
+    image_pad="<img>",
+    think_start='<|channel>thought\n',
+    think_end='\n<channel|>',
 )

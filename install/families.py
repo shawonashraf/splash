@@ -26,7 +26,7 @@ if __name__ == "__main__" and not __package__:
     __package__ = "install"
 
 from server import serve_options
-from server.chat_format import FLINT, QWEN, ChatFormat
+from server.chat_format import FLINT, GEMMA, QWEN, ChatFormat
 
 from . import models
 
@@ -46,6 +46,9 @@ QWEN_SAMPLING = SamplingDefaults(temperature=1.0, top_p=0.95, top_k=20)
 # What Flint's GGUF release states (general.sampling.temp, top_p, top_k),
 # which are Qwen's numbers.
 FLINT_SAMPLING = SamplingDefaults(temperature=1.0, top_p=0.95, top_k=20)
+# What Gemma's model card recommends: temperature 1.0, top_p 0.95,
+# top_k 64.
+GEMMA_SAMPLING = SamplingDefaults(temperature=1.0, top_p=0.95, top_k=64)
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,11 @@ FAMILIES = (
     ),
     # It has no vision tower.
     ModelFamily("Flint", "incoai/Flint-DFlash2", FLINT, FLINT_SAMPLING, vision=False),
+    # Its vision tower waits for its SigLIP variant; text only, from a GGUF
+    # (the engine's Gemma4 loads one only), until its draft trains.
+    ModelFamily(
+        "Gemma4", "incoai/Gemma-4-31B-DFlash2", GEMMA, GEMMA_SAMPLING, vision=False
+    ),
 )
 
 

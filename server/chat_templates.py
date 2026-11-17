@@ -190,7 +190,11 @@ class ChatTemplate:
 class ChatTemplates:
     """The tokenizer's templates, probed and chosen once at startup."""
 
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, chat_format=None):
+        # The served family's format: whose close of a reasoning the probes
+        # read. None reads the generic close.
+        self.chat_format = chat_format
+        think_end = chat_format.think_end if chat_format is not None else THINK_END
         defined = tokenizer.chat_template
         named = dict(defined) if isinstance(defined, dict) else {None: defined}
         if isinstance(defined, dict) and "default" not in named:
@@ -203,7 +207,7 @@ class ChatTemplates:
         prepared = {}
         for source in named.values():
             if source not in prepared:
-                prepared[source] = _prepare(render, encode, source)
+                prepared[source] = _prepare(render, encode, source, think_end)
         self.templates = {name: prepared[source] for name, source in named.items()}
 
     def select(self, tools):
@@ -276,7 +280,7 @@ def _encoder(tokenizer):
     return encode
 
 
-def _prepare(render, encode, source):
+def _prepare(render, encode, source, think_end):
     original = _original(render, source)
     later_system = UNSUPPORTED
     if original == RENDERS:
@@ -304,11 +308,11 @@ def _prepare(render, encode, source):
         _generation_prompts(render, encode, source),
         probe,
         *_reasoning(render, source),
-        _thinking_end(render, source),
+        _thinking_end(render, source, think_end),
     )
 
 
-def _thinking_end(render, source):
+def _thinking_end(render, source, think_end):
     """What the template writes from the end of a reply's reasoning through
     its close, such as Qwen's line break then </think>. None where the
     template renders no reasoning in a turn, or no </think> after it."""
@@ -325,10 +329,10 @@ def _thinking_end(render, source):
     )
     reasoning = _CALL["reasoning_content"]
     start = rendered.find(reasoning) if isinstance(rendered, str) else -1
-    end = rendered.find(THINK_END, start) if start >= 0 else -1
+    end = rendered.find(think_end, start) if start >= 0 else -1
     if end < 0:
         return None
-    return rendered[start + len(reasoning) : end + len(THINK_END)]
+    return rendered[start + len(reasoning) : end + len(think_end)]
 
 
 # Probe conversations. Leading system messages are already merged, as request

@@ -823,6 +823,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 job.public_id,
                 job.response_validator is not None,
                 job.chat_format.call_syntax,
+                think_end=job.chat_format.think_end,
             )
             if job.tool_policy is not None or job.reasoning is not None
             else None
@@ -1349,7 +1350,7 @@ def main():
         thinking_end = thinking_end_tokens(
             tokenizer, args.thinking_end_text, family.chat_format
         )
-        chat_templates = ChatTemplates(tokenizer)
+        chat_templates = ChatTemplates(tokenizer, family.chat_format)
         print_status(f"Chat template · {chat_templates.describe()}")
         # Unset, a budget ends thinking as the template closes it, so that the
         # next request renders that close back as the tokens the reply ended

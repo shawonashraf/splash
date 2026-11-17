@@ -118,28 +118,43 @@ class ReasoningSplitter:
             and chat_format is not None
             and chat_format.think_start_id is not None
         )
-        self.pending = ""
-        # Whether the newlines after </think>, which set the answer apart in
-        # the chat template's layout of a turn, are still to be dropped.
-        self.separator = False
-        self.ends = (
-            (THINK_END, chat_format.call_syntax.call_open)
-            if tool_calls and chat_format.calls_end_reasoning
-            else (THINK_END,)
+        # The tags the output frames its reasoning with, the format's.
+        self.think_start = (
+            chat_format.think_start if chat_format is not None else THINK_START
         )
+        self.think_end = (
+            chat_format.think_end if chat_format is not None else THINK_END
+        )
+        # A generation the engine cuts past its reasoning budget ends the
+        # block with the close token alone, without the line break its
+        # template writes before it (Gemma4's): the close reads without
+        # that line break too.
+        self.call_open = None
+        self.ends = (self.think_end,)
+        if tool_calls and chat_format is not None and chat_format.calls_end_reasoning:
+            self.call_open = chat_format.call_syntax.call_open
+            self.ends = (self.think_end, self.call_open)
+        if self.think_end.startswith("\n"):
+            self.ends += (self.think_end[1:],)
+        self.pending = ""
+        # Whether the newlines after the reasoning's close, which set the
+        # answer apart in the chat template's layout of a turn, are still
+        # to be dropped.
+        self.separator = False
 
     def put(self, text):
         if self.opening:
             self.pending += text
-            if len(self.pending) < len(THINK_START) and THINK_START.startswith(
-                self.pending
+            if (
+                len(self.pending) < len(self.think_start)
+                and self.think_start.startswith(self.pending)
             ):
                 return []
             self.opening = False
             text, self.pending = self.pending, ""
-            if text.startswith(THINK_START):
+            if text.startswith(self.think_start):
                 self.reasoning = True
-                text = text[len(THINK_START) :]
+                text = text[len(self.think_start) :]
         if not self.reasoning:
             return self._content(text)
         self.pending += text
@@ -152,11 +167,12 @@ class ReasoningSplitter:
             end, marker = min(ends)
             reasoning = self.pending[:end]
             content = self.pending[end:]
-            if marker == THINK_END:
-                content = content[len(THINK_END) :]
+            # The close goes; a call's opening stays: it begins the answer.
+            if marker != self.call_open:
+                content = content[len(marker) :]
             self.pending = ""
             self.reasoning = False
-            self.separator = marker == THINK_END
+            self.separator = marker != self.call_open
             output = [("reasoning_content", reasoning)] if reasoning else []
             return output + self._content(content)
         ready, self.pending = hold_partial(self.pending, *self.ends)
@@ -257,14 +273,18 @@ class StreamingToolCallProjector:
     its text the same way. A structured answer's JSON is left as it is.
     """
 
-    def __init__(self, policy, request_id, structured=False, syntax=None):
+    def __init__(
+        self, policy, request_id, structured=False, syntax=None, think_end=THINK_END
+    ):
         # The types of the tools its calls name, read as they name them.
         self.tool_types = ParameterTypes(policy) if policy is not None else None
         self.request_id = request_id
         # The layout its calls are read in, which a tool policy needs.
         self.syntax = syntax
+        # The close of the reasoning it drops, the served format's.
+        self.think_end = think_end
         self.text_tags = (
-            (syntax.call_open, THINK_END) if policy is not None else (THINK_END,)
+            (syntax.call_open, think_end) if policy is not None else (think_end,)
         )
         self.pending = ""
         self.state = "output" if structured else "content"
@@ -471,7 +491,7 @@ class StreamingToolCallProjector:
                     break
                 self._emit_content(self.pending[:start], events)
                 self.pending = self.pending[start + len(tag) :]
-                if tag != THINK_END:
+                if tag != self.think_end:
                     # A call's opening, the other tag.
                     self.state = "name"
                 continue

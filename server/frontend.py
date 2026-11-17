@@ -102,7 +102,7 @@ COMPLETION_DEFAULT_MAX_TOKENS = 16
 IMAGE_RENDER_MARKER = f"__splash_image_{secrets.token_hex(16)}__"
 
 
-def _generation_prompt(probed, rendered, tokens):
+def _generation_prompt(probed, rendered, tokens, think_start, think_end):
     """Whether the generation prompt opens a think block, and how many of the
     prompt's last tokens it is (zero where they differ from its tokens).
     `probed` is its text and tokens, as the startup probe found them for the
@@ -115,7 +115,7 @@ def _generation_prompt(probed, rendered, tokens):
         )
     count = len(ids)
     return (
-        text.rfind(THINK_START) > text.rfind(THINK_END),
+        text.rfind(think_start) > text.rfind(think_end),
         count if count < len(tokens) and tuple(tokens[-count:]) == ids else 0,
     )
 
@@ -777,7 +777,11 @@ class Frontend:
         thinking, generation_prompt_tokens = False, 0
         if add_generation_prompt:
             thinking, generation_prompt_tokens = _generation_prompt(
-                chat_template.generation_prompt(template), rendered, tokens
+                chat_template.generation_prompt(template),
+                rendered,
+                tokens,
+                self.chat_format.think_start,
+                self.chat_format.think_end,
             )
         return RenderedPrompt(
             rendered, tokens, images, positions, thinking, generation_prompt_tokens

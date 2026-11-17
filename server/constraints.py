@@ -11,7 +11,7 @@ from llguidance.numpy import (
     fill_next_token_bitmask_par_with_draft_tokens,
 )
 
-from .chat_format import THINK_END, THINK_START, TOOL_CALL_OPEN
+from .chat_format import TOOL_CALL_OPEN
 from .errors import APIError, ConstraintError
 from .lru import LRUCache
 
@@ -115,18 +115,51 @@ def validate_tokenizer(tokenizer, chat_format):
     each stop text one token (check_capabilities checks which stop tokens,
     once the engine names them)."""
     vocabulary = tokenizer.get_vocab()
-    expected = {
-        THINK_END: chat_format.think_end_id,
-        TOOL_CALL_OPEN: chat_format.call_open_id,
-    }
+    if (
+        vocabulary.get(TOOL_CALL_OPEN) != chat_format.call_open_id
+        or tokenizer.encode(TOOL_CALL_OPEN, add_special_tokens=False)
+        != [chat_format.call_open_id]
+    ):
+        raise TokenizerContractError(
+            f"tokenizer must encode {TOOL_CALL_OPEN!r} as native token "
+            f"{chat_format.call_open_id}"
+        )
+    added = set(tokenizer.added_tokens_decoder)
+    # The reasoning's close may span several tokens (Gemma4's line break then
+    # its channel close), and the opening the model writes itself too
+    # (Gemma4's channel open): the close ends at the format's one think
+    # token, the opening begins with it, and neither holds any other of the
+    # tokenizer's added tokens, which a rendered text could never spell
+    # around.
+    opened = tokenizer.encode(chat_format.think_start, add_special_tokens=False)
     if chat_format.think_start_id is not None:
-        expected[THINK_START] = chat_format.think_start_id
-    for token, token_id in expected.items():
-        if vocabulary.get(token) != token_id or tokenizer.encode(
-            token, add_special_tokens=False
-        ) != [token_id]:
+        if len(opened) == 1 and opened != [chat_format.think_start_id]:
             raise TokenizerContractError(
-                f"tokenizer must encode {token!r} as native token {token_id}"
+                f"tokenizer must encode {chat_format.think_start!r} as native token "
+                f"{chat_format.think_start_id}"
+            )
+        elif len(opened) > 1 and (
+            opened[0] != chat_format.think_start_id or set(opened[1:]) & added
+        ):
+            raise TokenizerContractError(
+                f"tokenizer must begin the reasoning's open "
+                f"{chat_format.think_start!r} with native token "
+                f"{chat_format.think_start_id}"
+            )
+    if chat_format.think_end_id is not None:
+        closed = tokenizer.encode(chat_format.think_end, add_special_tokens=False)
+        if len(closed) == 1 and closed != [chat_format.think_end_id]:
+            raise TokenizerContractError(
+                f"tokenizer must encode {chat_format.think_end!r} as native token "
+                f"{chat_format.think_end_id}"
+            )
+        elif len(closed) > 1 and (
+            closed[-1] != chat_format.think_end_id or set(closed[:-1]) & added
+        ):
+            raise TokenizerContractError(
+                f"tokenizer must end the reasoning's close "
+                f"{chat_format.think_end!r} with native token "
+                f"{chat_format.think_end_id}"
             )
     for stop in chat_format.stop_tokens:
         if len(tokenizer.encode(stop, add_special_tokens=False)) != 1:
