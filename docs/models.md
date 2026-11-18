@@ -140,7 +140,17 @@ an FP8 weight's F32 or BF16 `.weight_scale` is the tensor's `g` or, `[rows,
 ## GGUF targets
 
 `--model unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M` selects the repository's GGUF
-target for that variant (`upstream.select_gguf`). A target is a root-level
+target for that variant (`upstream.select_gguf`).
+
+Gemma4 (`unsloth/gemma-4-31B-it-GGUF`) is recognized: the installer derives
+its configuration and tokenizer from the GGUF's header, and the engine's
+check plans its tensors (`Gemma4Layout`, `Gemma4Gguf`), with 50 sliding
+layers (16 KV heads of 256, window 1024) and every 6th layer global (4 KV
+heads of 512, shared K/V). Serving it waits for its attention kernels and
+weight loader; its DFlash2 draft trains to [the Gemma4 draft
+spec](draft-gemma4.md).
+
+A target is a root-level
 `.gguf` file (a lower-case extension, as the native loader requires), the
 parts of a split GGUF at the root named by their model
 (`MODEL-00001-of-0000N.gguf ...`, `upstream.root_targets`), or the parts of a

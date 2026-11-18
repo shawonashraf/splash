@@ -8,7 +8,8 @@ These documents run from using Splash to working on it:
 - [API](api.md): the endpoints, request fields and limits, sampling, streaming,
   tool calls, structured output, images and PDFs, status and errors.
 - [Models](models.md): the model formats Splash loads, drafts, vision, chat
-  templates, local model files and Splash packages.
+  templates, local model files and Splash packages. [Training a DFlash2 draft
+  for Gemma4](draft-gemma4.md) specs the draft Gemma4 has none of yet.
 - [Internals](internals.md): the code's boundaries, installation, weight
   loading, kernels, sparse attention, Neural Engine prefill, host steps,
   residency, admission and eviction, sliding windows, the disk tier, the native
