@@ -147,6 +147,7 @@ void requireCompatibleModel(const LoadedModel &model);
 [[nodiscard]] SparseRowStoreOptions streamedTableRows(const Qwen3_8Layout &layout);
 [[nodiscard]] SparseRowStoreOptions streamedTableRows(const Qwen3_6MoeLayout &layout);
 [[nodiscard]] SparseRowStoreOptions streamedTableRows(const FlintLayout &layout);
+[[nodiscard]] SparseRowStoreOptions streamedTableRows(const Gemma4Layout &layout);
 
 // The vision role's source, planned; null for a model without vision.
 [[nodiscard]] std::unique_ptr<VisionLoader> planVisionLoader(const std::filesystem::path &root,

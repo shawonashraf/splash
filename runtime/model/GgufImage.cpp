@@ -2,6 +2,7 @@
 
 #include "metal/abi/ExecutionGeometry.h"
 #include "metal/abi/QuantFormat.h"
+#include "model/Gemma4.hpp"
 #include "model/GgufImageLayout.hpp"
 #include "model/StateLayout.hpp"
 #include "model/WeightLayout.hpp"
@@ -541,6 +542,7 @@ void hyperImage(Builder &b, const QwenTargetDimensions &g, const std::string &st
 // The Qwen3.5 hybrid's GGUFs (qwen35, qwen35moe): a norm before each layer's
 // mixer and FFN and before the logits.
 struct HybridGguf final {
+  static constexpr bool tiedEmbeddings = false;
   static constexpr std::array<std::string_view, 2> architectures{"qwen35", "qwen35moe"};
   template <class Expect, class ExpectFloat, class ExpectArray>
   static void metadata(const Expect &, const ExpectFloat &, const ExpectArray &, const QwenTargetDimensions &) {}
@@ -562,6 +564,7 @@ struct HybridGguf final {
 // layer's FFN, and its table in an image of its own.
 struct Qwen4ExpGguf final {
   static constexpr std::string_view architecture = "qwen4exp";
+  static constexpr bool tiedEmbeddings = false;
 
   // Its arrays: each layer's QSA compress ratio and the PLE layer.
   template <class Expect, class ExpectFloat, class ExpectArray>
@@ -635,6 +638,7 @@ struct Qwen4ExpGguf final {
 // experts' width. It has no GDN, and its scalars hold no rope.dimension_count:
 // its RoPE rotates whole heads.
 struct FlintGguf final {
+  static constexpr bool tiedEmbeddings = false;
   static constexpr std::string_view architecture = "flint";
   // llama.cpp's expert_gating_func of each router
   // (LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID).
@@ -679,13 +683,95 @@ struct FlintGguf final {
                      std::vector<Image> &) {}
 };
 
+// Gemma4's GGUFs (gemma4): plain attention layers of two geometries, each
+// with its q and k norms and a per-layer output scale, and dense SwiGLU
+// FFNs; a rope frequency table in the head. The KV pages hold the sliding
+// geometry; a global layer's 4 heads of 512 plan as its 8 pseudo-heads of
+// 256.
+struct Gemma4Gguf final {
+  static constexpr std::string_view architecture = "gemma4";
+  // Its token embedding is its output projection.
+  static constexpr bool tiedEmbeddings = true;
+
+  template <class Expect, class ExpectFloat, class ExpectArray>
+  static void metadata(const Expect &expect, const ExpectFloat &expectFloat, const ExpectArray &expectArray,
+                       const QwenTargetDimensions &g) {
+    const auto &gemma = static_cast<const Gemma4Layout &>(g);
+    expect("block_count", g.layers);
+    expect("context_length", g.nativeContextTokens);
+    expect("embedding_length", g.hiddenSize);
+    expect("feed_forward_length", g.intermediateSize);
+    expect("attention.head_count", g.attentionQueryHeads);
+    expect("attention.key_length", gemma.globalAttentionHeadDimension);
+    expect("attention.key_length_swa", g.attentionHeadDimension);
+    expect("attention.value_length", gemma.globalAttentionHeadDimension);
+    expect("attention.value_length_swa", g.attentionHeadDimension);
+    expect("attention.sliding_window", g.slidingWindow);
+    expect("attention.shared_kv_layers", 0);
+    expect("embedding_length_per_layer_input", 0);
+    expectFloat("rope.freq_base", gemma.globalRotaryTheta);
+    expectFloat("rope.freq_base_swa", g.rotaryTheta);
+    expect("rope.dimension_count", gemma.globalAttentionHeadDimension);
+    expect("rope.dimension_count_swa", g.attentionHeadDimension);
+    expectFloat("final_logit_softcapping", gemma.logitSoftcapping);
+    // Every layer's KV head count: the sliding layers' and the global
+    // layers', per layer.
+    expectArray("attention.head_count_kv", [&](std::span<const double> heads) {
+      bool matches = heads.size() == g.layers;
+      for (uint32_t layer = 0; matches && layer < g.layers; ++layer) {
+        const uint32_t expected =
+            gemma.kvLayout().windowed(layer) ? g.attentionKvHeads : gemma.globalAttentionKvHeads;
+        matches = heads[layer] == expected;
+      }
+      return matches;
+    });
+    expectArray("attention.sliding_window_pattern", [&g](std::span<const double> values) {
+      bool matches = values.size() == g.layers;
+      for (uint32_t layer = 0; matches && layer < g.layers; ++layer)
+        matches = values[layer] == double(layer < 64 && (g.slidingLayers >> layer & 1));
+      return matches;
+    });
+  }
+
+  static void layer(Builder &b, const QwenTargetDimensions &g, uint32_t index) {
+    const auto &gemma = static_cast<const Gemma4Layout &>(g);
+    const std::string p = prefix(index);
+    const bool global = !gemma.kvLayout().windowed(index);
+    const uint32_t headDim = global ? gemma.globalAttentionHeadDimension : g.attentionHeadDimension;
+    const uint64_t kvRows = uint64_t{global ? gemma.globalAttentionKvHeads : g.attentionKvHeads} * headDim;
+    const uint64_t qRows = uint64_t{g.attentionQueryHeads} * headDim;
+    b.floatNorm(p + "attn_norm.weight", g.hiddenSize);
+    b.quantized(p + "attn_q.weight", qRows, g.hiddenSize);
+    b.floatNorm(p + "attn_q_norm.weight", headDim);
+    b.quantized(p + "attn_k.weight", kvRows, g.hiddenSize);
+    b.floatNorm(p + "attn_k_norm.weight", headDim);
+    // The global layers share their K as V; the sliding layers hold both.
+    if (!global) b.quantized(p + "attn_v.weight", kvRows, g.hiddenSize);
+    b.quantized(p + "attn_output.weight", g.hiddenSize, qRows);
+    b.floatNorm(p + "post_attention_norm.weight", g.hiddenSize);
+    b.floatNorm(p + "ffn_norm.weight", g.hiddenSize);
+    b.quantized(p + "ffn_gate.weight", g.intermediateSize, g.hiddenSize);
+    b.quantized(p + "ffn_up.weight", g.intermediateSize, g.hiddenSize);
+    b.quantized(p + "ffn_down.weight", g.hiddenSize, g.intermediateSize);
+    b.floatNorm(p + "post_ffw_norm.weight", g.hiddenSize);
+    b.floatValues(p + "layer_output_scale.weight", 1);
+  }
+  static void head(Builder &b, const QwenTargetDimensions &g) {
+    b.floatNorm("output_norm.weight", g.hiddenSize);
+    b.floatValues("rope_freqs.weight", g.attentionHeadDimension);
+  }
+  static void tables(const GgufFile &, const QwenTargetDimensions &, PlanOptions, Problems &,
+                     std::vector<Image> &) {}
+};
+
 // Calls `use` with what the GGUFs of `architecture` hold: Qwen3.8-Flash-Next's
-// (Qwen4ExpGguf), Flint's (FlintGguf) or the Qwen3.5 hybrid's (HybridGguf).
-// Another architecture is refused, so a layout without a family here fails
-// by name rather than planning as the hybrid.
+// (Qwen4ExpGguf), Flint's (FlintGguf), Gemma4's (Gemma4Gguf) or the Qwen3.5
+// hybrid's (HybridGguf). Another architecture is refused, so a layout
+// without a family here fails by name rather than planning as the hybrid.
 template <class Use> decltype(auto) withFamily(std::string_view architecture, Use &&use) {
   if (architecture == Qwen4ExpGguf::architecture) return use(Qwen4ExpGguf{});
   if (architecture == FlintGguf::architecture) return use(FlintGguf{});
+  if (architecture == Gemma4Gguf::architecture) return use(Gemma4Gguf{});
   if (std::ranges::find(HybridGguf::architectures, architecture) == HybridGguf::architectures.end())
     throw GgufError("no GGUF family plans architecture " + std::string(architecture));
   return use(HybridGguf{});
@@ -704,7 +790,7 @@ std::vector<Image> familyImages(const GgufFile &file, const QwenTargetDimensions
   }
   Builder head(file, g, problems, "head.bin", g.layers, 2);
   Family::head(head, g);
-  head.quantized("output.weight", g.vocabularySize, g.hiddenSize);
+  if (!Family::tiedEmbeddings) head.quantized("output.weight", g.vocabularySize, g.hiddenSize);
   images.push_back(head.finish());
   Builder embedding(file, g, problems, "embedding.bin", g.vocabularySize, g.hiddenSize);
   embedding.embeddingRows("token_embd.weight");
@@ -902,15 +988,20 @@ void requireMetadata(const GgufFile &file, std::string_view architecture, const 
   expect("block_count", geometry.layers + metadata.unsignedValue(arch + ".nextn_predict_layers").value_or(0));
   expect("embedding_length", geometry.hiddenSize);
   expect("attention.head_count", geometry.attentionWidth / geometry.attentionHeadDimension);
-  expect("attention.head_count_kv", geometry.attentionKvHeads);
-  expect("attention.key_length", geometry.attentionHeadDimension);
-  expect("attention.value_length", geometry.attentionHeadDimension);
+  // A dual-geometry target (Gemma4's) states its KV heads, head widths and
+  // RoPE per geometry; its family's metadata checks those keys.
+  if (!geometry.dualAttentionGeometry) {
+    expect("attention.head_count_kv", geometry.attentionKvHeads);
+    expect("attention.key_length", geometry.attentionHeadDimension);
+    expect("attention.value_length", geometry.attentionHeadDimension);
+  }
   // A GGUF whose RoPE rotates whole heads (Flint's) need not state the
   // rotated dimensions, but one that does states the target's.
-  if (2 * geometry.rotaryPairs != geometry.attentionHeadDimension ||
-      metadata.unsignedValue(arch + ".rope.dimension_count"))
+  if (!geometry.dualAttentionGeometry &&
+      (2 * geometry.rotaryPairs != geometry.attentionHeadDimension ||
+       metadata.unsignedValue(arch + ".rope.dimension_count")))
     expect("rope.dimension_count", 2ull * geometry.rotaryPairs);
-  expectFloat("rope.freq_base", geometry.rotaryTheta);
+  if (!geometry.dualAttentionGeometry) expectFloat("rope.freq_base", geometry.rotaryTheta);
   expectFloat("attention.layer_norm_rms_epsilon", SPLASH_RMS_EPSILON);
   if (const auto scaling = metadata.stringValue(arch + ".rope.scaling.type"); scaling && *scaling != "none")
     mismatched += (mismatched.empty() ? "" : ", ") + std::string("rope.scaling.type ") + *scaling + " (expected none)";

@@ -59,6 +59,13 @@ TargetWeights readTarget(metal::MetalBackend &backend, const FlintLayout &layout
   return loadFlintWeights(backend, layout, files);
 }
 
+TargetWeights readTarget(metal::MetalBackend &, const Gemma4Layout &, const QwenTargetFiles &) {
+  // Gemma4's kernels and weight loader are not in the engine yet; its GGUF
+  // planner refuses the architecture before this, as it does any unknown
+  // one.
+  throw std::invalid_argument("Gemma4 target weights do not load yet: the engine's Gemma4 kernels are next");
+}
+
 } // namespace
 
 SparseRowStoreOptions streamedTableRows(const Qwen3_8Layout &) { return {}; }
@@ -66,6 +73,8 @@ SparseRowStoreOptions streamedTableRows(const Qwen3_8Layout &) { return {}; }
 SparseRowStoreOptions streamedTableRows(const Qwen3_6MoeLayout &) { return {}; }
 
 SparseRowStoreOptions streamedTableRows(const FlintLayout &) { return {}; }
+
+SparseRowStoreOptions streamedTableRows(const Gemma4Layout &) { return {}; }
 
 StreamedParts StreamedParts::loaded(const LoadedModel &model, bool kv) noexcept {
   const SparseRowStore *table = model.streamedTable();

@@ -62,6 +62,11 @@ struct QwenTargetDimensions {
   uint64_t slidingLayers = 0;
   uint64_t unrotatedLayers = 0;
   uint32_t fullAttentionPeriod = 0;
+  // Whether the attention layers come in two geometries, whose keys the
+  // family's GGUF metadata checks instead of the baseline's single-geometry
+  // ones (Gemma4's: sliding and global layers with their own KV heads, head
+  // widths and RoPE bases).
+  bool dualAttentionGeometry = false;
   // The token whose row a DFlash2 draft's mask rows read
   // (dflash_config.mask_token_id). A family whose vocabulary keeps none for
   // it (Flint's) names instead the tokens its drafts choose theirs among,

@@ -374,6 +374,39 @@ void validateTextConfig(NSDictionary *text, const FlintLayout &target, TargetSou
     if (text[@(key)]) requireBooleans(text, "text config", {{key, false}});
 }
 
+// Gemma4's text configuration, which the installer derives from its GGUF's
+// header: the sizes every family's holds (sizeDifference), then the dual
+// attention geometry and the rest as the layout's values make them: the
+// dense FFN's width, the global layers' KV heads and head width against the
+// sliding layers', the sliding window and its layers (layer_types), the two
+// RoPE bases and head widths, the RMS epsilon, the final logit softcapping,
+// and the EOS.
+void validateTextConfig(NSDictionary *text, const Gemma4Layout &target, TargetSource source) {
+  const std::string_view name = sourceName(source);
+  if (const auto difference = sizeDifference(text, target, source)) throw unsupportedModel(difference->difference);
+  requireNumbers(text, name, "text config",
+                 {{"intermediate_size", target.intermediateSize},
+                  {"num_key_value_heads", target.attentionKvHeads},
+                  {"num_global_key_value_heads", target.globalAttentionKvHeads},
+                  {"global_head_dim", target.globalAttentionHeadDimension},
+                  {"sliding_window", target.slidingWindow},
+                  {"rope_theta", target.globalRotaryTheta},
+                  {"rope_theta_swa", target.rotaryTheta},
+                  {"rope_dimension_count", target.globalAttentionHeadDimension},
+                  {"rope_dimension_count_swa", target.attentionHeadDimension},
+                  {"final_logit_softcapping", target.logitSoftcapping}});
+  // The header holds the epsilon as a float32, whose rounding of 1e-6 the
+  // derived config carries.
+  const double eps = requireNumber(text[@"rms_norm_eps"], "text config rms_norm_eps").doubleValue;
+  if (std::fabs(eps - SPLASH_RMS_EPSILON) > 1e-9)
+    throw std::invalid_argument("text config rms_norm_eps mismatch: " + std::string(name) + " " +
+                                std::to_string(eps) + ", runtime " + std::to_string(SPLASH_RMS_EPSILON));
+  requireLayerTypes(requireArray(text, @"layer_types", "text config layer_types"), target, name,
+                    "text config layer_types");
+  requireWholes(requireArray(text, @"eos_token_id", "text config eos_token_id"), target.stopTokens.tokens(), name,
+                "text config eos_token_id");
+}
+
 // The mask token a DFlash2 draft of a family whose drafts choose theirs
 // names (dflash_config.mask_token_id), which must be one of the target's
 // reserved tokens; readDraftLayout then holds the draft to it.
