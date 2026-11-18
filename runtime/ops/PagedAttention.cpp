@@ -71,6 +71,14 @@ constexpr std::array kCompiledAttention{
     CompiledAttention{32, 2, 256, kv::Reads::EveryPage, true, false, 32, false, 0, "_kv2_g16", "_kv2_g8"},
     CompiledAttention{24, 2, 256, kv::Reads::SelectedBlocks, true, false, 32, false, 0, "_kv2_g12", "_kv2_vt"},
     CompiledAttention{32, 4, 128, kv::Reads::EveryPage, false, true, 64, true, 512, "_kv4_g8_d128", "_kv4_d128"},
+    // Gemma4's sliding layers: 32 query heads over 16 KV heads of 256, a
+    // window of the 1023 keys before each row, whole-head RoPE (128 pairs).
+    // Its global layers' queries are 512 wide against 256-wide keys, which
+    // no compiled geometry holds yet.
+    CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 1023, "_kv16_g2_d256_w1023",
+                      "_kv16_d256"},
+    CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 0, "_kv16_g2_d256",
+                      "_kv16_d256"},
 };
 
 // Whether a compiled geometry's pages are a layout's: its KV heads, head

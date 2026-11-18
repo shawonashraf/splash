@@ -78,6 +78,8 @@ VERIFY_ATTENTION_QKV(verify_attention_qkv_f32, 24, 4, 256, 32, true, float)
 VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g8_f32, 16, 2, 256, 32, true, float)
 VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, float)
 VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float)
 VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float)
 // Four KV heads of 128 dimensions without an output gate, their whole heads
 // rotated (64 pairs) or unrotated.
@@ -138,6 +140,7 @@ VERIFY_ATTENTION_GATE(verify_attention_gate_kv2_g16, 32, 2, 256)
         nullptr, attention, hidden, params, index, grid_size);                 \
   }
 VERIFY_ATTENTION_GATHER(verify_attention_gather_kv4_g8_d128, 32, 4, 128)
+VERIFY_ATTENTION_GATHER(verify_attention_gather_kv16_g2_d256, 32, 16, 256)
 #undef VERIFY_ATTENTION_GATHER
 
 #define ATTENTION_GATE_TABLE(Name, QHeads, KHeads, HeadDim, Layout) \
