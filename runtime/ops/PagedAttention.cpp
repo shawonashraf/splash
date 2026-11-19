@@ -73,19 +73,27 @@ constexpr std::array kCompiledAttention{
     CompiledAttention{32, 4, 128, kv::Reads::EveryPage, false, true, 64, true, 512, "_kv4_g8_d128", "_kv4_d128"},
     // Gemma4's sliding layers: 32 query heads over 16 KV heads of 256, a
     // window of the 1023 keys before each row, whole-head RoPE (128 pairs).
-    // Its global layers' queries are 512 wide against 256-wide keys, which
-    // no compiled geometry holds yet.
     CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 1023, "_kv16_g2_d256_w1023",
                       "_kv16_d256"},
     CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 0, "_kv16_g2_d256",
                       "_kv16_d256"},
+    // Gemma4's global layers: 32 query heads over 4 KV heads of 512, read from
+    // the same 16-of-256 pages (each 512 head spans two stored pseudo-heads),
+    // whole history, whole-head RoPE (256 pairs).
+    CompiledAttention{32, 4, 512, kv::Reads::EveryPage, false, false, 256, false, 0, "_kv4_g8_d512",
+                      "_kv16_d256"},
 };
 
 // Whether a compiled geometry's pages are a layout's: its KV heads, head
-// dimension and value order.
+// dimension and value order. A dual-geometry layout's page holds more,
+// smaller heads than a global layer reads at once, so equal footprints match
+// too (Gemma4's: 16 of 256 store its 4 global heads of 512).
 bool storesLayout(const CompiledAttention &compiled, kv::Layout layout) {
-  return compiled.kvHeads == layout.kvHeads && compiled.headDimension == layout.headDimension &&
-         kv::valuesTokenMajorFor(compiled.reads) == layout.valuesTokenMajor;
+  return (compiled.kvHeads == layout.kvHeads && compiled.headDimension == layout.headDimension &&
+          kv::valuesTokenMajorFor(compiled.reads) == layout.valuesTokenMajor) ||
+         (uint64_t{compiled.kvHeads} * compiled.headDimension ==
+              uint64_t{layout.kvHeads} * layout.headDimension &&
+          kv::valuesTokenMajorFor(compiled.reads) == layout.valuesTokenMajor);
 }
 
 // The KV store kernels' suffix of a layout's KV heads, head dimension and

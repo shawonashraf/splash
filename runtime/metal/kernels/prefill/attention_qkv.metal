@@ -60,6 +60,8 @@ PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, f
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, true, bfloat)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, true, float)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float)
 // Four KV heads of 128 dimensions without an output gate, their whole heads
 // rotated (64 pairs) or unrotated.
@@ -108,4 +110,5 @@ PREFILL_ATTENTION_GATE(prefill_attention_gate_kv2_g16, 32, 2, 256)
   }
 PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv4_g8_d128, 32, 4, 128)
 PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv16_g2_d256, 32, 16, 256)
+PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv4_g8_d512, 32, 4, 512)
 #undef PREFILL_ATTENTION_GATHER

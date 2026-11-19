@@ -154,8 +154,9 @@ template <uint Window> inline uint splash_attention_first_page(uint first_positi
 // The scale of a head's scores, 1/sqrt(HeadDim), as the literal of each head
 // dimension the kernels are compiled for.
 template <uint HeadDim> constexpr float splash_attention_scale() {
-  static_assert(HeadDim == 128 || HeadDim == 256, "a score scale for each compiled head dimension");
-  return HeadDim == 256 ? 0.0625f : 0.08838834764831845f;
+  static_assert(HeadDim == 128 || HeadDim == 256 || HeadDim == 512,
+                "a score scale for each compiled head dimension");
+  return HeadDim == 512 ? 0.04419417382415922f : HeadDim == 256 ? 0.0625f : 0.08838834764831845f;
 }
 
 // The lanes of one fused row in the page loop: the softmax's, eight of a
