@@ -5,6 +5,7 @@
 #include "model/Qwen3_6Moe.hpp"
 #include "model/Qwen3_8.hpp"
 #include "model/WeightStore.hpp"
+#include "metal/abi/RowCopy.h"
 #include "ops/AneFfn.hpp"
 #include "ops/Embedding.hpp"
 #include "ops/Normalization.hpp"
@@ -507,6 +508,11 @@ template <class Buffers> metal::MetalBuffer mixerOutput(const Buffers &b, const 
   return b.attentionOutput;
 }
 
+// A layer's output scale (Gemma4's layer_scalar), when its family has one.
+template <class Layer> std::optional<float> layerOutputScale(const Layer &) {
+  return std::nullopt;
+}
+
 // The Qwen3.5 architecture: Qwen3.8-27B (model/Qwen3_8.hpp, a dense FFN),
 // Qwen3.6-35B-A3B (model/Qwen3_6Moe.hpp, a sparse MoE) and Flint
 // (model/Flint.hpp: every layer attends, with its sinks, and its FFN is dense
@@ -549,6 +555,7 @@ public:
           },
           layer.mixer);
       addVerifyFfn(step, layer, residual, output);
+      addLayerOutputScale(step.graph, layer, output, step.rows);
       if (const auto slot = geometry_.captureSlot(index))
         addCapture(step.graph, *slot, output, 0, buffers.capturedTargetHidden, 0, step.rows);
     }
@@ -587,7 +594,9 @@ private:
           return block.rows;
         },
         layer.mixer);
-    addPrefillFfn(step, index, layer, residual, step.readRows.empty() ? b.hidden[(index & 1) ^ 1] : input);
+    const metal::MetalBuffer output = step.readRows.empty() ? b.hidden[(index & 1) ^ 1] : input;
+    addPrefillFfn(step, index, layer, residual, output);
+    addLayerOutputScale(step.graph, layer, output, step.rows);
   }
   [[nodiscard]] const ops::BlockMoeWeights *moe(uint32_t index) const { return qwenMoeBlock(weights_.layers[index]); }
   void addPrefillExperts(PrefillStep &step, uint32_t index) const {
@@ -618,6 +627,18 @@ private:
       addVerifyDenseFfn(step, layer.postAttentionNorm, *dense, std::move(residual), std::move(output));
     else
       addVerifyMoe(step, layer.postAttentionNorm, *qwenMoeBlock(layer), std::move(residual), std::move(output));
+  }
+
+  // A family's per-layer output scale (Gemma4's layer_scalar) over the
+  // layer's `rows` output values.
+  void addLayerOutputScale(metal::CommandGraph &graph, const Layer &layer, metal::MetalBuffer output,
+                           uint32_t rows) const {
+    const std::optional<float> scale = layerOutputScale(layer);
+    if (!scale) return;
+    constexpr uint32_t kThreads = metal::CommandGraph::kDefaultThreads;
+    const uint64_t count = uint64_t{rows} * geometry_.hiddenSize;
+    graph.add("scale_rows_bf16", {std::move(output)}, ScaleRowsParams{*scale, static_cast<uint32_t>(count)},
+              {(count + kThreads - 1) / kThreads, 1, 1}, {kThreads, 1, 1});
   }
 
   const QwenTargetWeights<Layout, Layer> &weights_;

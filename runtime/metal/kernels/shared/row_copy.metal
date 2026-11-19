@@ -13,3 +13,13 @@ kernel void copy_rows_bf16(device const bfloat *source [[buffer(0)]],
       source[ulong(p.source_row + row) * p.source_stride + p.source_column +
              column];
 }
+
+// One thread per value: every value multiplied by p.scale in place (a
+// layer's output scale, Gemma4's layer_scalar).
+kernel void scale_rows_bf16(device bfloat *rows [[buffer(0)]],
+                            constant ScaleRowsParams &p [[buffer(1)]],
+                            uint index [[thread_position_in_grid]]) {
+  if (index >= p.count)
+    return;
+  rows[index] = bfloat(float(rows[index]) * p.scale);
+}

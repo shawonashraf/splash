@@ -23,3 +23,13 @@ struct RowCopyParams {
 
 static_assert(sizeof(RowCopyParams) == 32,
               "Row copy parameters are 32 bytes on both sides");
+
+// `count` bf16 values, each multiplied by `scale` in place (a layer's output
+// scale, Gemma4's layer_scalar).
+struct ScaleRowsParams {
+  float scale;
+  uint32_t count;
+};
+
+static_assert(sizeof(ScaleRowsParams) == 8,
+              "Scale parameters are 8 bytes on both sides");

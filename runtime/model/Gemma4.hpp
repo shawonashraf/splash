@@ -104,5 +104,8 @@ using Gemma4Weights = QwenTargetWeights<Gemma4Layout, Gemma4LayerWeights>;
 // Its every layer's FFN is dense.
 [[nodiscard]] const ops::BlockMoeWeights *qwenMoeBlock(const Gemma4LayerWeights &) noexcept;
 [[nodiscard]] std::optional<ops::SwiGluProjections> denseFfn(const Gemma4LayerWeights &layer) noexcept;
+// The layer's learned output scale (HF layer_scalar), which multiplies the
+// whole layer output after its residuals.
+[[nodiscard]] std::optional<float> layerOutputScale(const Gemma4LayerWeights &layer) noexcept;
 
 } // namespace splash::model

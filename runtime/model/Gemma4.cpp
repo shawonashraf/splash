@@ -78,4 +78,9 @@ std::optional<ops::SwiGluProjections> denseFfn(const Gemma4LayerWeights &layer) 
   return ops::SwiGluProjections{&layer.gateProjection, &layer.upProjection, &layer.downProjection};
 }
 
+std::optional<float> layerOutputScale(const Gemma4LayerWeights &layer) noexcept {
+  if (!layer.outputScale) return std::nullopt;
+  return std::optional<float>{*static_cast<const float *>(layer.outputScale.contents())};
+}
+
 } // namespace splash::model
