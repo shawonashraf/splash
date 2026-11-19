@@ -124,15 +124,18 @@ def validate_tokenizer(tokenizer, chat_format):
             f"tokenizer must encode {open_tag!r} as native token "
             f"{chat_format.call_open_id}"
         )
-    added = set(tokenizer.added_tokens_decoder)
+    try:
+        added = set(tokenizer.added_tokens_decoder)
+    except TypeError:
+        added = set()
     # The reasoning's close may span several tokens (Gemma4's line break then
     # its channel close), and the opening the model writes itself too
     # (Gemma4's channel open): the close ends at the format's one think
     # token, the opening begins with it, and neither holds any other of the
     # tokenizer's added tokens, which a rendered text could never spell
     # around.
-    opened = tokenizer.encode(chat_format.think_start, add_special_tokens=False)
     if chat_format.think_start_id is not None:
+        opened = tokenizer.encode(chat_format.think_start, add_special_tokens=False)
         if len(opened) == 1 and opened != [chat_format.think_start_id]:
             raise TokenizerContractError(
                 f"tokenizer must encode {chat_format.think_start!r} as native token "

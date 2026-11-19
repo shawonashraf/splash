@@ -102,7 +102,7 @@ COMPLETION_DEFAULT_MAX_TOKENS = 16
 IMAGE_RENDER_MARKER = f"__splash_image_{secrets.token_hex(16)}__"
 
 
-def _generation_prompt(probed, rendered, tokens, think_start, think_end):
+def _generation_prompt(probed, rendered, tokens, think_start=THINK_START, think_end=THINK_END):
     """Whether the generation prompt opens a think block, and how many of the
     prompt's last tokens it is (zero where they differ from its tokens).
     `probed` is its text and tokens, as the startup probe found them for the
