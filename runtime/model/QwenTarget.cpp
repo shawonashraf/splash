@@ -476,8 +476,15 @@ void QwenTarget::addNormalizedHead(metal::CommandGraph &graph, const ops::NormWe
   const ops::PreparedInput normalized =
       ops::Normalization::addRms(graph, std::move(hidden), finalNorm, finalHidden, geometry_.hiddenSize,
                                  lanes * kVerifyRows, scratch, decodeInput(vocabularyProjection(), lanes));
-  addDecodeProjection(graph, std::move(finalHidden), vocabularyProjection(), std::move(logits), lanes, scratch,
+  addDecodeProjection(graph, std::move(finalHidden), vocabularyProjection(), logits, lanes, scratch,
                       normalized);
+  // Gemma4's softcap, s * tanh(l / s), over the batch's logits rows.
+  if (geometry_.logitSoftcapping > 0.0F) {
+    constexpr uint32_t kThreads = metal::CommandGraph::kDefaultThreads;
+    const uint64_t count = uint64_t{lanes} * kVerifyRows * geometry_.vocabularySize;
+    graph.add("softcap_logits", {logits}, geometry_.logitSoftcapping,
+              {(count + kThreads - 1) / kThreads, 1, 1}, {kThreads, 1, 1});
+  }
 }
 
 void QwenTarget::addCapture(metal::CommandGraph &graph, uint32_t slot, metal::MetalBuffer output,

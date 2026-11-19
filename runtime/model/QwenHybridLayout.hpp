@@ -67,6 +67,9 @@ struct QwenTargetDimensions {
   // ones (Gemma4's: sliding and global layers with their own KV heads, head
   // widths and RoPE bases).
   bool dualAttentionGeometry = false;
+  // The final logit softcap s, applied as s * tanh(l / s) to the logits; 0
+  // for none (Gemma4's is 30).
+  float logitSoftcapping = 0.0F;
   // The token whose row a DFlash2 draft's mask rows read
   // (dflash_config.mask_token_id). A family whose vocabulary keeps none for
   // it (Flint's) names instead the tokens its drafts choose theirs among,

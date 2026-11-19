@@ -46,12 +46,10 @@ struct Gemma4Layout final : QwenHybridLayout {
   static constexpr bool loadsSafetensors = false;
 
   // The global layers' KV heads and head width (the sliding layers' are the
-  // base's attentionKvHeads and attentionHeadDimension), their RoPE base,
-  // and the final logit softcapping's s (0 for none).
+  // base's attentionKvHeads and attentionHeadDimension), their RoPE base.
   uint32_t globalAttentionKvHeads = 4;
   uint32_t globalAttentionHeadDimension = 512;
   float globalRotaryTheta = 1'000'000.0F;
-  float logitSoftcapping = 30.0F;
 
   // Gemma4-31B's, its first family (kFamilies).
   constexpr Gemma4Layout()
@@ -71,6 +69,7 @@ struct Gemma4Layout final : QwenHybridLayout {
                           .slidingLayers = kGemma4SlidingLayers,
                           .fullAttentionPeriod = 1,
                           .dualAttentionGeometry = true,
+                          .logitSoftcapping = 30.0F,
                           .maskToken = 4,
                           .stopTokens = {106},
                           .ffnKind = QwenFfnKind::Dense,
