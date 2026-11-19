@@ -59,11 +59,8 @@ TargetWeights readTarget(metal::MetalBackend &backend, const FlintLayout &layout
   return loadFlintWeights(backend, layout, files);
 }
 
-TargetWeights readTarget(metal::MetalBackend &, const Gemma4Layout &, const QwenTargetFiles &) {
-  // Gemma4's kernels and weight loader are not in the engine yet; its GGUF
-  // planner refuses the architecture before this, as it does any unknown
-  // one.
-  throw std::invalid_argument("Gemma4 target weights do not load yet: the engine's Gemma4 kernels are next");
+TargetWeights readTarget(metal::MetalBackend &backend, const Gemma4Layout &layout, const QwenTargetFiles &files) {
+  return loadGemma4Weights(backend, layout, files);
 }
 
 } // namespace

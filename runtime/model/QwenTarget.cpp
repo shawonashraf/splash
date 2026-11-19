@@ -1,6 +1,7 @@
 #include "model/QwenTarget.hpp"
 
 #include "model/Flint.hpp"
+#include "model/Gemma4.hpp"
 #include "model/Qwen3_6Moe.hpp"
 #include "model/Qwen3_8.hpp"
 #include "model/WeightStore.hpp"
@@ -629,6 +630,8 @@ template std::unique_ptr<QwenTarget> makeQwenTarget(const Qwen3_8Weights &, cons
 template std::unique_ptr<QwenTarget> makeQwenTarget(const Qwen3_6MoeWeights &, const QwenTargetGeometry &,
                                                     metal::MetalBackend &, const ops::ExecutionPlans &, uint32_t);
 template std::unique_ptr<QwenTarget> makeQwenTarget(const FlintWeights &, const QwenTargetGeometry &,
+                                                    metal::MetalBackend &, const ops::ExecutionPlans &, uint32_t);
+template std::unique_ptr<QwenTarget> makeQwenTarget(const Gemma4Weights &, const QwenTargetGeometry &,
                                                     metal::MetalBackend &, const ops::ExecutionPlans &, uint32_t);
 
 } // namespace splash::model

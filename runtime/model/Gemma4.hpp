@@ -18,8 +18,13 @@
 // Its weights load from a GGUF only.
 
 #include "QwenHybridLayout.hpp"
+#include "QwenTarget.hpp"
+#include "QwenTargetFiles.hpp"
+#include "ops/Linear.hpp"
+#include "ops/Normalization.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace splash::model {
@@ -73,5 +78,32 @@ struct Gemma4Layout final : QwenHybridLayout {
                          "Gemma4"} {}
   bool operator==(const Gemma4Layout &) const = default;
 };
+
+
+
+// A layer: its input norm, its attention (the q/k/v projections of its own
+// geometry, the q and k norms of its head width, its output projection), the
+// norm after it, the FFN's norm, its dense SwiGLU, the norm after the FFN and
+// its learned output scale (a float per layer).
+struct Gemma4LayerWeights final {
+  ops::NormWeights inputNorm;
+  QwenMixerWeights mixer;
+  ops::NormWeights postAttentionNorm;
+  ops::NormWeights ffnNorm;
+  ops::Projection gateProjection;
+  ops::Projection upProjection;
+  ops::Projection downProjection;
+  ops::NormWeights postFfnNorm;
+  metal::MetalBuffer outputScale;
+};
+
+using Gemma4Weights = QwenTargetWeights<Gemma4Layout, Gemma4LayerWeights>;
+
+[[nodiscard]] Gemma4Weights loadGemma4Weights(metal::MetalBackend &backend, Gemma4Layout layout,
+                                              const QwenTargetFiles &files);
+
+// Its every layer's FFN is dense.
+[[nodiscard]] const ops::BlockMoeWeights *qwenMoeBlock(const Gemma4LayerWeights &) noexcept;
+[[nodiscard]] std::optional<ops::SwiGluProjections> denseFfn(const Gemma4LayerWeights &layer) noexcept;
 
 } // namespace splash::model

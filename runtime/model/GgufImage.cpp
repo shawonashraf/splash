@@ -742,11 +742,11 @@ struct Gemma4Gguf final {
     const uint64_t qRows = uint64_t{g.attentionQueryHeads} * headDim;
     b.floatNorm(p + "attn_norm.weight", g.hiddenSize);
     b.quantized(p + "attn_q.weight", qRows, g.hiddenSize);
-    b.floatNorm(p + "attn_q_norm.weight", headDim);
     b.quantized(p + "attn_k.weight", kvRows, g.hiddenSize);
-    b.floatNorm(p + "attn_k_norm.weight", headDim);
     // The global layers share their K as V; the sliding layers hold both.
     if (!global) b.quantized(p + "attn_v.weight", kvRows, g.hiddenSize);
+    b.floatNorm(p + "attn_q_norm.weight", headDim);
+    b.floatNorm(p + "attn_k_norm.weight", headDim);
     b.quantized(p + "attn_output.weight", g.hiddenSize, qRows);
     b.floatNorm(p + "post_attention_norm.weight", g.hiddenSize);
     b.floatNorm(p + "ffn_norm.weight", g.hiddenSize);
