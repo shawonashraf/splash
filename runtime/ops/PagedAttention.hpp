@@ -124,6 +124,11 @@ struct AttentionWorkspace final {
 struct AttentionVariant final {
   bool rotated = true;
   uint32_t windowTokens = 0;
+  // Whether the layer RMS-norms its values per head before storing them
+  // (Gemma4's v_norm), and whether its values are its keys, shared (its
+  // global layers, which store no values of their own).
+  bool valueNorm = false;
+  bool sharedKv = false;
   bool operator==(const AttentionVariant &) const = default;
 };
 

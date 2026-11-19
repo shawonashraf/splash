@@ -142,7 +142,10 @@ std::string reduceKernel(std::string_view phase, const CompiledAttention &compil
 // The q/k norm and RoPE kernel of a geometry's variant, before its norms'
 // type.
 std::string projectionKernel(std::string_view phase, const CompiledAttention &compiled, AttentionVariant variant) {
-  return kernelName(phase, "qkv", std::string(compiled.suffix) + (variant.rotated ? "" : "_nope"));
+  std::string suffix = std::string(compiled.suffix) + (variant.rotated ? "" : "_nope");
+  if (variant.valueNorm) suffix += "_vnorm";
+  if (variant.sharedKv) suffix += "_sharedkv";
+  return kernelName(phase, "qkv", suffix);
 }
 
 // A layout's KV format, as its kernels' names hold it.

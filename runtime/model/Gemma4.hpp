@@ -69,6 +69,7 @@ struct Gemma4Layout final : QwenHybridLayout {
                           .slidingLayers = kGemma4SlidingLayers,
                           .fullAttentionPeriod = 1,
                           .dualAttentionGeometry = true,
+                          .valueNormed = true,
                           .logitSoftcapping = 30.0F,
                           .maskToken = 4,
                           .stopTokens = {106},

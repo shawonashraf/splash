@@ -67,6 +67,10 @@ struct QwenTargetDimensions {
   // ones (Gemma4's: sliding and global layers with their own KV heads, head
   // widths and RoPE bases).
   bool dualAttentionGeometry = false;
+  // Whether every attention layer RMS-norms its values per head before they
+  // are stored (Gemma4's v_norm, which has no scale), and its global layers
+  // of the dual geometry share their keys as those values (no attn_v).
+  bool valueNormed = false;
   // The final logit softcap s, applied as s * tanh(l / s) to the logits; 0
   // for none (Gemma4's is 30).
   float logitSoftcapping = 0.0F;

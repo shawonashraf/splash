@@ -139,7 +139,9 @@ struct QwenTargetGeometry final : QwenTargetDimensions {
   // the window of kvLayout where that names it.
   [[nodiscard]] constexpr ops::AttentionVariant attentionVariant(uint32_t attention) const noexcept {
     return {.rotated = attention >= 64 || !(unrotatedLayers >> attention & 1),
-            .windowTokens = kvLayout.windowed(attention) ? kvLayout.windowTokens : 0};
+            .windowTokens = kvLayout.windowed(attention) ? kvLayout.windowTokens : 0,
+            .valueNorm = valueNormed,
+            .sharedKv = valueNormed && !kvLayout.windowed(attention)};
   }
   [[nodiscard]] constexpr std::span<const uint32_t>
   captureLayers() const noexcept {

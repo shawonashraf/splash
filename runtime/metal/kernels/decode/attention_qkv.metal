@@ -3,7 +3,8 @@
 #include "metal/kernels/common/attention_gate.h"
 #include "metal/kernels/common/attention_qkv_prepare.h"
 
-template <uint QHeads, uint KHeads, uint HeadDim, uint RotaryPairs, bool Gated, class W>
+template <uint QHeads, uint KHeads, uint HeadDim, uint RotaryPairs, bool Gated, class W,
+          bool ValueNorm = false, bool SharedKV = false>
 inline void full_qkv_decode_phase(
     device const bfloat *qkv, device const W *q_norm,
     device const W *k_norm, device const float *rope_cos,
@@ -12,13 +13,15 @@ inline void full_qkv_decode_phase(
     threadgroup bfloat *normalized, uint2 group, uint thread_index, uint lane,
     uint simd_group) {
   constexpr uint QStride = Gated ? 2 * HeadDim : HeadDim;
-  constexpr uint PackedStride = QHeads * QStride + 2 * KHeads * HeadDim;
+  constexpr uint PackedStride =
+      QHeads * QStride + (SharedKV ? KHeads : 2 * KHeads) * HeadDim;
   constexpr uint Rows = SPLASH_TARGET_VERIFY_ROWS;
   constexpr uint Stride = SPLASH_VERIFY_CHUNK_STRIDE;
   uint batch = group.y;
   constexpr ulong kv_lane_stride = ulong(KHeads) * Stride * HeadDim;
   FullPrefillParams lane_params{Rows, Stride};
-  full_qkv_storage_phase<QHeads, KHeads, HeadDim, RotaryPairs, Gated>(
+  full_qkv_storage_phase<QHeads, KHeads, HeadDim, RotaryPairs, Gated, W,
+                         ValueNorm, SharedKV>(
       qkv + ulong(batch) * Rows * PackedStride, q_norm, k_norm,
       rope_cos + ulong(batch) * Rows * RotaryPairs,
       rope_sin + ulong(batch) * Rows * RotaryPairs,
@@ -31,7 +34,7 @@ inline void full_qkv_decode_phase(
 // W: the q/k norm weights' stored type (float: a GGUF's F32 norms, _f32);
 // HeadDim, RotaryPairs and Gated: full_qkv_storage_phase's.
 #define VERIFY_ATTENTION_QKV(Name, QHeads, KHeads, HeadDim, RotaryPairs,      \
-                             Gated, W)                                        \
+                             Gated, W, ValueNorm, SharedKV)                   \
   kernel void Name(                                                           \
       device const bfloat *qkv [[buffer(0)]],                                 \
       device const W *q_norm [[buffer(1)]],                                   \
@@ -46,13 +49,15 @@ inline void full_qkv_decode_phase(
       uint simd_group [[simdgroup_index_in_threadgroup]]) {                   \
     threadgroup float reductions[HeadDim / 32];                               \
     threadgroup bfloat normalized[HeadDim];                                   \
-    full_qkv_decode_phase<QHeads, KHeads, HeadDim, RotaryPairs, Gated>(       \
+    full_qkv_decode_phase<QHeads, KHeads, HeadDim, RotaryPairs, Gated, W,    \
+                          ValueNorm, SharedKV>(                              \
         qkv, q_norm, k_norm, rope_cos, rope_sin, queries, keys, values,       \
         reductions, normalized, group, thread_index, lane, simd_group);       \
   }
 
 // A layer without RoPE (NoPE) binds no tables.
-#define VERIFY_ATTENTION_QKV_NOPE(Name, QHeads, KHeads, HeadDim, Gated, W)    \
+#define VERIFY_ATTENTION_QKV_NOPE(Name, QHeads, KHeads, HeadDim, Gated, W,  \
+                                   ValueNorm, SharedKV)                       \
   kernel void Name(                                                           \
       device const bfloat *qkv [[buffer(0)]],                                 \
       device const W *q_norm [[buffer(1)]],                                   \
@@ -65,28 +70,35 @@ inline void full_qkv_decode_phase(
       uint simd_group [[simdgroup_index_in_threadgroup]]) {                   \
     threadgroup float reductions[HeadDim / 32];                               \
     threadgroup bfloat normalized[HeadDim];                                   \
-    full_qkv_decode_phase<QHeads, KHeads, HeadDim, 0, Gated>(                 \
+    full_qkv_decode_phase<QHeads, KHeads, HeadDim, 0, Gated, W, ValueNorm,  \
+                          SharedKV>(                                          \
         qkv, q_norm, k_norm, nullptr, nullptr, queries, keys, values,         \
         reductions, normalized, group, thread_index, lane, simd_group);       \
   }
 // Each geometry's instances for the norm types its families store: bf16 (an
 // MLX target's) and F32, or F32 alone for Qwen3.8-Flash-Next's (_kv2_g12) and
 // Flint's (_kv4_g8_d128), which load from GGUFs only.
-VERIFY_ATTENTION_QKV(verify_attention_qkv, 24, 4, 256, 32, true, bfloat)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g8, 16, 2, 256, 32, true, bfloat)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_f32, 24, 4, 256, 32, true, float)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g8_f32, 16, 2, 256, 32, true, float)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, float)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, true, bfloat)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, true, float)
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float)
+VERIFY_ATTENTION_QKV(verify_attention_qkv, 24, 4, 256, 32, true, bfloat, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g8, 16, 2, 256, 32, true, bfloat, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_f32, 24, 4, 256, 32, true, float, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g8_f32, 16, 2, 256, 32, true, float, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, float, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, true, bfloat, false, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, true, float, false, false)
+// Gemma4's value-normed layers: the sliding ones norm their own values; the
+// global ones share their keys as values.
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256_vnorm, 32, 16, 256, 128, true, bfloat, true, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv16_g2_d256_vnorm_f32, 32, 16, 256, 128, true, float, true, false)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d512_vnorm_sharedkv, 32, 4, 512, 256, true, bfloat, true, true)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d512_vnorm_sharedkv_f32, 32, 4, 512, 256, true, float, true, true)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float, false, false)
 // Four KV heads of 128 dimensions without an output gate, their whole heads
 // rotated (64 pairs) or unrotated.
-VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d128_f32, 32, 4, 128, 64, false, float)
-VERIFY_ATTENTION_QKV_NOPE(verify_attention_qkv_kv4_g8_d128_nope_f32, 32, 4, 128, false, float)
+VERIFY_ATTENTION_QKV(verify_attention_qkv_kv4_g8_d128_f32, 32, 4, 128, 64, false, float, false, false)
+VERIFY_ATTENTION_QKV_NOPE(verify_attention_qkv_kv4_g8_d128_nope_f32, 32, 4, 128, false, float, false, false)
 #undef VERIFY_ATTENTION_QKV_NOPE
 #undef VERIFY_ATTENTION_QKV
 

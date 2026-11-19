@@ -5,7 +5,7 @@
 // W: the q/k norm weights' stored type (float: a GGUF's F32 norms, _f32);
 // HeadDim, RotaryPairs and Gated: full_qkv_storage_phase's.
 #define PREFILL_ATTENTION_QKV(Name, QHeads, KHeads, HeadDim, RotaryPairs,     \
-                              Gated, W)                                       \
+                              Gated, W, ValueNorm, SharedKV)                  \
   kernel void Name(                                                           \
       device const bfloat *qkv [[buffer(0)]],                                 \
       device const W *q_norm [[buffer(1)]],                                   \
@@ -22,14 +22,16 @@
       uint simd_group [[simdgroup_index_in_threadgroup]]) {                   \
     threadgroup float reductions[HeadDim / 32];                               \
     threadgroup bfloat normalized[HeadDim];                                   \
-    full_qkv_storage_phase<QHeads, KHeads, HeadDim, RotaryPairs, Gated>(      \
+    full_qkv_storage_phase<QHeads, KHeads, HeadDim, RotaryPairs, Gated, W,   \
+                           ValueNorm, SharedKV>(                              \
         qkv, q_norm, k_norm, rope_cos, rope_sin, queries, chunk_keys,         \
         chunk_values, params, reductions, normalized, task, thread_index,     \
         lane, simd_group);                                                    \
   }
 
 // A layer without RoPE (NoPE) binds no tables.
-#define PREFILL_ATTENTION_QKV_NOPE(Name, QHeads, KHeads, HeadDim, Gated, W)   \
+#define PREFILL_ATTENTION_QKV_NOPE(Name, QHeads, KHeads, HeadDim, Gated, W,  \
+                                   ValueNorm, SharedKV)                       \
   kernel void Name(                                                           \
       device const bfloat *qkv [[buffer(0)]],                                 \
       device const W *q_norm [[buffer(1)]],                                   \
@@ -44,7 +46,8 @@
       uint simd_group [[simdgroup_index_in_threadgroup]]) {                   \
     threadgroup float reductions[HeadDim / 32];                               \
     threadgroup bfloat normalized[HeadDim];                                   \
-    full_qkv_storage_phase<QHeads, KHeads, HeadDim, 0, Gated>(                \
+    full_qkv_storage_phase<QHeads, KHeads, HeadDim, 0, Gated, W, ValueNorm,  \
+                           SharedKV>(                                         \
         qkv, q_norm, k_norm, nullptr, nullptr, queries, chunk_keys,           \
         chunk_values, params, reductions, normalized, task, thread_index,     \
         lane, simd_group);                                                    \
@@ -52,21 +55,27 @@
 // Each geometry's instances for the norm types its families store: bf16 (an
 // MLX target's) and F32, or F32 alone for Qwen3.8-Flash-Next's (_kv2_g12) and
 // Flint's (_kv4_g8_d128), which load from GGUFs only.
-PREFILL_ATTENTION_QKV(prefill_attention_qkv, 24, 4, 256, 32, true, bfloat)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g8, 16, 2, 256, 32, true, bfloat)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_f32, 24, 4, 256, 32, true, float)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g8_f32, 16, 2, 256, 32, true, float)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, float)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, true, bfloat)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, true, float)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv, 24, 4, 256, 32, true, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g8, 16, 2, 256, 32, true, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_f32, 24, 4, 256, 32, true, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g8_f32, 16, 2, 256, 32, true, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, true, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, true, float, false, false)
+// Gemma4's value-normed layers: the sliding ones norm their own values; the
+// global ones share their keys as values.
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm, 32, 16, 256, 128, true, bfloat, true, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm_f32, 32, 16, 256, 128, true, float, true, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv, 32, 4, 512, 256, true, bfloat, true, true)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv_f32, 32, 4, 512, 256, true, float, true, true)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float, false, false)
 // Four KV heads of 128 dimensions without an output gate, their whole heads
 // rotated (64 pairs) or unrotated.
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d128_f32, 32, 4, 128, 64, false, float)
-PREFILL_ATTENTION_QKV_NOPE(prefill_attention_qkv_kv4_g8_d128_nope_f32, 32, 4, 128, false, float)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d128_f32, 32, 4, 128, 64, false, float, false, false)
+PREFILL_ATTENTION_QKV_NOPE(prefill_attention_qkv_kv4_g8_d128_nope_f32, 32, 4, 128, false, float, false, false)
 #undef PREFILL_ATTENTION_QKV_NOPE
 #undef PREFILL_ATTENTION_QKV
 
