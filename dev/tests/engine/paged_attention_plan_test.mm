@@ -85,9 +85,7 @@ uint32_t prefillSplits(uint32_t rows, uint32_t history, bool sparse) {
 // A layout's split or reduce pipeline of a phase ("prefill" or "verify").
 std::string pipelineName(std::string_view phase, bool split, uint32_t queryHeads, kv::Layout layout) {
   const bool sparse = selectsBlocks(layout);
-  // The kernels of four KV heads, the first compiled, have no suffix.
-  const std::string suffix = layout.kvHeads == 4 ? "" : "_kv" + std::to_string(layout.kvHeads) + "_g" +
-                                                            std::to_string(queryHeads / layout.kvHeads);
+  const std::string suffix = ops::PagedAttention::splitKernelSuffix(queryHeads, layout);
   const std::string format = layout.format == kv::Format::Int8 ? "q8_" : "bf16_";
   return std::string(phase) + "_attention_" +
          (split ? format + (sparse ? "sparse" : "split") : std::string(sparse ? "sparse_reduce" : "reduce")) +
@@ -992,13 +990,14 @@ void checkVerify(metal::MetalBackend &backend, uint32_t heads, kv::Layout layout
 // is within an ulp of the fp64 rotation of the bf16-rounded norms plus an ulp
 // of the larger input, which covers the fp32 kernel rounding a norm to the
 // other bf16 neighbour and a rotation that cancels.
-void checkProjection(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout layout,
-                     bool float32, bool verify) {
-  constexpr uint32_t kDim = 256, kPairs = 32;
+void checkProjection(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout layout, uint32_t rotaryPairs,
+                     bool gated, bool float32, bool verify) {
+  const uint32_t kDim = layout.headDimension, kPairs = rotaryPairs;
   const uint32_t kvHeads = layout.kvHeads, group = queryHeads / kvHeads;
   const uint32_t lanes = verify ? 3 : 1, rows = verify ? 8 : 37,
                  stride = verify ? kv::kVerifyChunkStride : 64;
-  const uint32_t packedWidth = 2 * queryHeads * kDim + 2 * kvHeads * kDim;
+  const uint32_t qStride = gated ? 2 * kDim : kDim;
+  const uint32_t packedWidth = queryHeads * qStride + 2 * kvHeads * kDim;
   auto packed = allocate(backend, uint64_t{lanes} * rows * packedWidth * 2);
   auto ropeCos = allocate(backend, uint64_t{lanes} * rows * kPairs * 4);
   auto ropeSin = allocate(backend, ropeCos.sizeBytes());
@@ -1045,7 +1044,7 @@ void checkProjection(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layo
         const bool query = head < queryHeads;
         const uint32_t h = query ? head : head - queryHeads;
         const uint16_t *source = packedData + packedRow +
-                                 (query ? h * 2 * kDim : 2 * queryHeads * kDim + h * kDim);
+                                 (query ? h * qStride : queryHeads * qStride + h * kDim);
         const uint16_t *out =
             query ? queryData + (((uint64_t{lane} * kvHeads + h / group) * stride + row) * group +
                                  h % group) * kDim
@@ -1096,10 +1095,12 @@ void checkProjection(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layo
 // visible tokens, and the plans' partials and statistics. Prefill stages a
 // chunk of 37 tokens after 100 in 64 rows per KV head, its attention whole
 // tiles of 8 rows; verify stages three lanes' 8 rows in 32 per KV head.
-void bufferExtents(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout layout) {
-  constexpr uint32_t dimension = 256, tokens = 37, stride = 64, committed = 100, lanes = 3;
+void bufferExtents(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout layout, uint32_t rotaryPairs,
+                   bool gated) {
+  const uint32_t dimension = layout.headDimension;
+  constexpr uint32_t tokens = 37, stride = 64, committed = 100, lanes = 3;
   const uint32_t kvHeads = layout.kvHeads, group = queryHeads / kvHeads;
-  const uint64_t packedWidth = uint64_t{2 * queryHeads + 2 * kvHeads} * dimension;
+  const uint64_t packedWidth = (uint64_t{queryHeads} * (gated ? 2 : 1) + 2 * kvHeads) * dimension;
   const uint64_t queryWidth = uint64_t{group} * dimension, verifyRows = uint64_t{lanes} * kv::kVerifyRows;
   const uint64_t verifyHeads = uint64_t{lanes} * kvHeads;
   // `rows` rows of each of `heads` heads, `rowStride` rows apart; values
@@ -1122,7 +1123,8 @@ void bufferExtents(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout
   using Extents = std::initializer_list<test::BufferExtent>;
   // The q/k norms of both projections, whose other buffers hold every row.
   const uint64_t rows = std::max<uint64_t>(tokens, verifyRows);
-  const metal::MetalBuffer packed = allocate(backend, rows * packedWidth * 2), rope = allocate(backend, rows * 32 * 4),
+  const metal::MetalBuffer packed = allocate(backend, rows * packedWidth * 2),
+                           rope = allocate(backend, rows * uint64_t{rotaryPairs} * 4),
                            staging = allocate(backend, staged(verifyHeads, stride, stride, queryWidth));
   for (const bool verify : {false, true})
     for (const bool key : {false, true}) {
@@ -1142,8 +1144,8 @@ void bufferExtents(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout
   using Buffers = std::vector<metal::MetalBuffer>;
   test::requireExtents(backend,
                        Extents{{0, tokens * packedWidth * 2, 2, "attention q/k/v"},
-                               {1, uint64_t{tokens} * 32 * 4, 4, "attention RoPE cosine"},
-                               {2, uint64_t{tokens} * 32 * 4, 4, "attention RoPE sine"},
+                               {1, uint64_t{tokens} * rotaryPairs * 4, 4, "attention RoPE cosine"},
+                               {2, uint64_t{tokens} * rotaryPairs * 4, 4, "attention RoPE sine"},
                                {3, staged(kvHeads, stride, tokens, queryWidth), 2, "attention query"},
                                {4, staged(kvHeads, stride, tokens, dimension), 2, "attention key"},
                                {5, stagedValues(kvHeads, stride, tokens), 2, "attention value"}},
@@ -1156,8 +1158,8 @@ void bufferExtents(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout
   };
   test::requireExtents(backend,
                        Extents{{0, verifyRows * packedWidth * 2, 2, "attention q/k/v"},
-                               {1, verifyRows * 32 * 4, 4, "attention RoPE cosine"},
-                               {2, verifyRows * 32 * 4, 4, "attention RoPE sine"},
+                               {1, verifyRows * uint64_t{rotaryPairs} * 4, 4, "attention RoPE cosine"},
+                               {2, verifyRows * uint64_t{rotaryPairs} * 4, 4, "attention RoPE sine"},
                                {3, verifyStaged(queryWidth), 2, "attention query"},
                                {4, verifyStaged(dimension), 2, "attention key"},
                                {5, stagedValues(verifyHeads, kv::kVerifyChunkStride, kv::kVerifyRows), 2,
@@ -1166,26 +1168,30 @@ void bufferExtents(metal::MetalBackend &backend, uint32_t queryHeads, kv::Layout
                          ops::PagedAttention::addVerifyProjection(graph, b[0], queryNorm, keyNorm, b[1], b[2], b[3],
                                                                   b[4], b[5], queryHeads, layout, lanes);
                        });
-  test::requireExtents(backend,
-                       Extents{{0, gateRows(tokens), 2, "attention gate"},
-                               {1, staged(kvHeads, stride, tokens, queryWidth), 2, "attention row"},
-                               {2, uint64_t{tokens} * queryHeads * dimension * 2, 2, "attention hidden"}},
-                       [&](metal::CommandGraph &graph, const Buffers &b) {
-                         ops::PagedAttention::addPrefillGate(graph, b[0], b[1], b[2], tokens, stride, queryHeads,
-                                                             layout);
-                       });
-  const uint32_t width = queryHeads * dimension;
-  test::requireExtents(backend,
-                       Extents{{0, gateRows(verifyRows), 2, "attention gate"},
-                               {1, verifyStaged(queryWidth), 2, "attention row"},
-                               {2, verifyRows * width * 2, 2, "attention hidden"},
-                               {3, ops::tableBytes(width, verifyRows), 2, "linear table"},
-                               {4, ops::tableSumsBytes(ops::LinearInput::Table16, width, verifyRows), 4,
-                                "linear table sums"}},
-                       [&](metal::CommandGraph &graph, const Buffers &b) {
-                         (void)ops::PagedAttention::addVerifyGate(graph, b[0], b[1], b[2], queryHeads, layout, lanes,
-                                                                  {b[3], b[4], {}, {}}, ops::LinearInput::Table16);
-                       });
+  // A gated geometry's packed rows hold each query head's output gate after
+  // its queries; an ungated one's (Gemma4's) hold the queries alone.
+  if (gated) {
+    test::requireExtents(backend,
+                         Extents{{0, gateRows(tokens), 2, "attention gate"},
+                                 {1, staged(kvHeads, stride, tokens, queryWidth), 2, "attention row"},
+                                 {2, uint64_t{tokens} * queryHeads * dimension * 2, 2, "attention hidden"}},
+                         [&](metal::CommandGraph &graph, const Buffers &b) {
+                           ops::PagedAttention::addPrefillGate(graph, b[0], b[1], b[2], tokens, stride, queryHeads,
+                                                               layout);
+                         });
+    const uint32_t width = queryHeads * dimension;
+    test::requireExtents(backend,
+                         Extents{{0, gateRows(verifyRows), 2, "attention gate"},
+                                 {1, verifyStaged(queryWidth), 2, "attention row"},
+                                 {2, verifyRows * width * 2, 2, "attention hidden"},
+                                 {3, ops::tableBytes(width, verifyRows), 2, "linear table"},
+                                 {4, ops::tableSumsBytes(ops::LinearInput::Table16, width, verifyRows), 4,
+                                  "linear table sums"}},
+                         [&](metal::CommandGraph &graph, const Buffers &b) {
+                           (void)ops::PagedAttention::addVerifyGate(graph, b[0], b[1], b[2], queryHeads, layout, lanes,
+                                                                    {b[3], b[4], {}, {}}, ops::LinearInput::Table16);
+                         });
+  }
 
   const auto chunk = ops::PagedAttention::prefillParams(committed, tokens, stride, 8);
   test::requireExtents(backend,
@@ -1659,7 +1665,8 @@ int main(int argc, char **argv) {
     ropeRangeMatchesPositions(backend);
     ropeTargetScaling(backend);
     for (const Geometry geometry : kGeometries)
-      bufferExtents(backend, geometry.queryHeads, geometry.layout(kv::Format::Int8));
+      bufferExtents(backend, geometry.queryHeads, geometry.layout(kv::Format::Int8), geometry.rotaryPairs,
+                    geometry.gated);
     attentionBlocks(backend);
     stageEncoding(backend);
     blockListsMatchMasks(backend);
@@ -1668,7 +1675,8 @@ int main(int argc, char **argv) {
     for (const Geometry geometry : kGeometries)
       for (bool float32 : splash::test::familyNorms(geometry))
         for (bool verify : {false, true})
-          checkProjection(backend, geometry.queryHeads, geometry.layout(kv::Format::Int8), float32, verify);
+          checkProjection(backend, geometry.queryHeads, geometry.layout(kv::Format::Int8), geometry.rotaryPairs,
+                          geometry.gated, float32, verify);
     if (argc == 3 && std::string_view(argv[2]) == "--long") {
       for (auto format : {kv::Format::Int8, kv::Format::BFloat16})
         for (const Geometry geometry : kGeometries)

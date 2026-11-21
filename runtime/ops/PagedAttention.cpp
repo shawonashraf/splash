@@ -73,7 +73,7 @@ constexpr std::array kCompiledAttention{
     CompiledAttention{32, 4, 128, kv::Reads::EveryPage, false, true, 64, true, 512, "_kv4_g8_d128", "_kv4_d128"},
     // Gemma4's sliding layers: 32 query heads over 16 KV heads of 256, a
     // window of the 1023 keys before each row, whole-head RoPE (128 pairs).
-    CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 1023, "_kv16_g2_d256_w1023",
+    CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 1023, "_kv16_g2_d256",
                       "_kv16_d256"},
     CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 0, "_kv16_g2_d256",
                       "_kv16_d256"},
@@ -411,6 +411,10 @@ AttentionWorkspace PagedAttention::verifyWorkspace(
 bool PagedAttention::compiles(uint32_t queryHeads, kv::Layout layout, bool gated, uint32_t rotaryPairs) {
   const CompiledAttention &compiled = compiledAttention(queryHeads, layout);
   return compiled.gated == gated && compiled.rotaryPairs == rotaryPairs;
+}
+
+std::string PagedAttention::splitKernelSuffix(uint32_t queryHeads, kv::Layout layout, AttentionVariant variant) {
+  return splitSuffix(compiledAttention(queryHeads, layout, variant), variant);
 }
 
 void PagedAttention::addPrefillProjection(

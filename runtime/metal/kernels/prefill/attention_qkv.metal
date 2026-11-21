@@ -61,16 +61,16 @@ PREFILL_ATTENTION_QKV(prefill_attention_qkv_f32, 24, 4, 256, 32, true, float, fa
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g8_f32, 16, 2, 256, 32, true, float, false, false)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g12_f32, 24, 2, 256, 32, true, float, false, false)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16, 32, 2, 256, 32, true, bfloat, false, false)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, true, bfloat, false, false)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, true, float, false, false)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, true, bfloat, false, false)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, true, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256, 32, 16, 256, 128, false, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_f32, 32, 16, 256, 128, false, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512, 32, 4, 512, 256, false, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_f32, 32, 4, 512, 256, false, float, false, false)
 // Gemma4's value-normed layers: the sliding ones norm their own values; the
 // global ones share their keys as values.
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm, 32, 16, 256, 128, true, bfloat, true, false)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm_f32, 32, 16, 256, 128, true, float, true, false)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv, 32, 4, 512, 256, true, bfloat, true, true)
-PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv_f32, 32, 4, 512, 256, true, float, true, true)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm, 32, 16, 256, 128, false, bfloat, true, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm_f32, 32, 16, 256, 128, false, float, true, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv, 32, 4, 512, 256, false, bfloat, true, true)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv_f32, 32, 4, 512, 256, false, float, true, true)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float, false, false)
 // Four KV heads of 128 dimensions without an output gate, their whole heads
 // rotated (64 pairs) or unrotated.

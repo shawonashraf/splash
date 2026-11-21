@@ -324,6 +324,11 @@ public:
   // no kernels.
   [[nodiscard]] static bool compiles(uint32_t queryHeads, kv::Layout layout, bool gated,
                                      uint32_t rotaryPairs);
+  // The split and reduce kernels' name suffix of the compiled geometry of
+  // `queryHeads` over `layout`, with a variant's window: the geometry's
+  // suffix, then _w<window> for a windowed variant.
+  [[nodiscard]] static std::string splitKernelSuffix(uint32_t queryHeads, kv::Layout layout,
+                                                     AttentionVariant variant = {});
 
   // The q/k norms and, for a rotated variant, the RoPE of the packed
   // projection rows (every query head's queries, and a gated geometry's

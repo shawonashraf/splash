@@ -40,6 +40,11 @@ struct AttentionGeometry final {
   uint32_t kvHeads;
   uint32_t headDimension;
   kv::Reads reads;
+  // The rotary pairs of each row the prepare kernels rotate (the rest of a
+  // head passes through unrotated), and whether each packed row holds each
+  // query head's output gate after its queries.
+  uint32_t rotaryPairs;
+  bool gated;
 
   // Its pages of one attention layer in `format`, in its reader's value order.
   [[nodiscard]] kv::Layout layout(kv::Format format) const {
@@ -62,7 +67,8 @@ struct AttentionGeometry final {
 // A family's attention geometry.
 template <class Family> [[nodiscard]] AttentionGeometry attentionGeometry(const Family &family) {
   const kv::Layout layout = family.kvLayout();
-  return {family.attentionQueryHeads, layout.kvHeads, layout.headDimension, layout.reads};
+  return {family.attentionQueryHeads, layout.kvHeads, layout.headDimension, layout.reads, family.rotaryPairs,
+          family.attentionGate};
 }
 // Each family's full attention of 256-wide heads, the paged and sparse
 // attention tests' (q8_flash_attention_metal_test, paged_attention_plan_test).
