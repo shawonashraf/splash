@@ -37,7 +37,7 @@ QwenMixerWeights readGemma4Attention(WeightFile &file, const BlockTargetFormat &
 Gemma4Weights loadGemma4Weights(metal::MetalBackend &backend, Gemma4Layout layout,
                                 const QwenTargetFiles &files) {
   return loadQwenTarget<Gemma4Weights>(
-      backend, layout, files, [&](GgufTargetLoader &gguf, const BlockTargetFormat &format, const MoeExperts &) {
+      backend, layout, files, [&](auto &gguf, const BlockTargetFormat &format, const MoeExperts &) {
         Gemma4Weights result;
         result.layout = layout;
         result.layers.reserve(layout.layers);

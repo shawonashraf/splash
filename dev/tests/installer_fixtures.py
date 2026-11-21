@@ -30,7 +30,7 @@ FLASH_NEXT = families.named("Qwen3.8-Flash-Next")
 FLINT = families.named("Flint")
 GEMMA4 = families.named("Gemma4")
 # The families whose targets the engine loads from a GGUF only.
-GGUF_ONLY = (FLASH_NEXT, FLINT, GEMMA4)
+GGUF_ONLY = (FLASH_NEXT, FLINT)
 MODEL = "mlx-community/Qwen3.8-27B-4bit"
 # An MLX config.json (of a GGUF_ONLY family, the one the installer derives
 # from its GGUF), a DFlash2 draft config and, of Qwen3.6-35B-A3B and the
@@ -60,9 +60,12 @@ def family_config(family, name="config.json"):
 
 def mlx_target(root, family, *, changes=None):
     """An MLX repository of family's target: its config.json, with changes
-    to its text_config, tokenizer files and weights."""
+    to its text_config, tokenizer files and weights. A family whose GGUF's
+    derived config differs from its MLX one (Gemma4's rope keys) reads
+    config-mlx.json instead."""
     root.mkdir(parents=True, exist_ok=True)
-    target = family_config(family)
+    mlx = CONFIGS / family.name.lower() / "config-mlx.json"
+    target = json.loads((mlx if mlx.exists() else CONFIGS / family.name.lower() / "config.json").read_text())
     target["text_config"] |= changes or {}
     (root / "config.json").write_text(json.dumps(target))
     for name in ("tokenizer.json", "tokenizer_config.json", "model.safetensors"):

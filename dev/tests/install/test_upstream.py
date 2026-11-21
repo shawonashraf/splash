@@ -31,6 +31,7 @@ from dev.tests.installer_fixtures import (
     fake_hub,
     family_config,
     fixture,
+    GEMMA4,
     http_error,
     listing,
     missing_repository,
@@ -83,10 +84,13 @@ class UpstreamTest(unittest.TestCase):
                 continue
             config = mlx_target(self.root / family.name, family) / "config.json"
             draft = draft_dir(self.root / family.name / "draft", family)
+            # A family without a vision tower (Gemma4's waits for its SigLIP
+            # variant) serves text only: no vision config to check.
+            vision = "safetensors" if family.vision else "none"
             for arguments in ({}, {"draft": draft / "config.json"}):
                 self.assertIs(
                     upstream.check_model(
-                        "mlx-affine", "safetensors", config, **arguments
+                        "mlx-affine", vision, config, **arguments
                     ),
                     family,
                 )
@@ -104,7 +108,8 @@ class UpstreamTest(unittest.TestCase):
             )
             return {"gguf_headers": directory}
 
-        for family in GGUF_ONLY:
+        # Gemma4 also loads from a GGUF, alongside its MLX checkpoints.
+        for family in (*GGUF_ONLY, GEMMA4):
             configs = CONFIGS / family.name.lower()
             gguf_check = headers(family)
             for arguments in ({}, {"draft": configs / "draft" / "config.json"}):

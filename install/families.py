@@ -96,7 +96,7 @@ FAMILIES = (
     # It has no vision tower.
     ModelFamily("Flint", "incoai/Flint-DFlash2", FLINT, FLINT_SAMPLING, vision=False),
     # Its vision tower waits for its SigLIP variant; text only, from a GGUF
-    # (the engine's Gemma4 loads one only), until its draft trains.
+    # or an MLX checkpoint, until its draft trains.
     ModelFamily(
         "Gemma4",
         "incoai/Gemma-4-31B-DFlash2",

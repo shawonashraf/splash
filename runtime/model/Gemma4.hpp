@@ -15,7 +15,8 @@
 //  - Each layer's q and k carry their own RMS norm (of the head width), and
 //    the logits pass through a softcap, s * tanh(l / s) with
 //    final_logit_softcapping s.
-// Its weights load from a GGUF only.
+// Its weights load from a GGUF or an MLX-style safetensors checkpoint (whose
+// config nests the RoPE parameters and ties the embeddings).
 
 #include "QwenHybridLayout.hpp"
 #include "QwenTarget.hpp"
@@ -39,11 +40,10 @@ inline constexpr uint64_t kGemma4SlidingLayers = [] {
 }();
 
 struct Gemma4Layout final : QwenHybridLayout {
-  // Its config's text model type and its GGUFs' architecture; no safetensors
-  // checkpoint of it loads.
+  // Its config's text model type and its GGUFs' architecture.
   static constexpr std::string_view modelType = "gemma4_text";
   static constexpr std::string_view ggufArchitecture = "gemma4";
-  static constexpr bool loadsSafetensors = false;
+  static constexpr bool loadsSafetensors = true;
 
   // The global layers' KV heads and head width (the sliding layers' are the
   // base's attentionKvHeads and attentionHeadDimension), their RoPE base.

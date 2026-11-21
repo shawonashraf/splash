@@ -390,11 +390,22 @@ void validateTextConfig(NSDictionary *text, const Gemma4Layout &target, TargetSo
                   {"num_global_key_value_heads", target.globalAttentionKvHeads},
                   {"global_head_dim", target.globalAttentionHeadDimension},
                   {"sliding_window", target.slidingWindow},
-                  {"rope_theta", target.globalRotaryTheta},
-                  {"rope_theta_swa", target.rotaryTheta},
-                  {"rope_dimension_count", target.globalAttentionHeadDimension},
-                  {"rope_dimension_count_swa", target.attentionHeadDimension},
                   {"final_logit_softcapping", target.logitSoftcapping}});
+  if (source == TargetSource::Safetensors) {
+    // A safetensors checkpoint's text_config nests the RoPE parameters per
+    // attention kind instead of the derived config's flat rope.* keys.
+    NSDictionary *rope = requireObject(text, @"rope_parameters", "text config rope_parameters");
+    requireNumbers(requireObject(rope, @"full_attention", "text config rope_parameters full_attention"), name,
+                   "text config rope_parameters full_attention", {{"rope_theta", target.globalRotaryTheta}});
+    requireNumbers(requireObject(rope, @"sliding_attention", "text config rope_parameters sliding_attention"),
+                   name, "text config rope_parameters sliding_attention", {{"rope_theta", target.rotaryTheta}});
+  } else {
+    requireNumbers(text, name, "text config",
+                   {{"rope_theta", target.globalRotaryTheta},
+                    {"rope_theta_swa", target.rotaryTheta},
+                    {"rope_dimension_count", target.globalAttentionHeadDimension},
+                    {"rope_dimension_count_swa", target.attentionHeadDimension}});
+  }
   // The header holds the epsilon as a float32, whose rounding of 1e-6 the
   // derived config carries.
   const double eps = requireNumber(text[@"rms_norm_eps"], "text config rms_norm_eps").doubleValue;
@@ -403,8 +414,9 @@ void validateTextConfig(NSDictionary *text, const Gemma4Layout &target, TargetSo
                                 std::to_string(eps) + ", runtime " + std::to_string(SPLASH_RMS_EPSILON));
   requireLayerTypes(requireArray(text, @"layer_types", "text config layer_types"), target, name,
                     "text config layer_types");
-  requireWholes(requireArray(text, @"eos_token_id", "text config eos_token_id"), target.stopTokens.tokens(), name,
-                "text config eos_token_id");
+  if (source != TargetSource::Safetensors)
+    requireWholes(requireArray(text, @"eos_token_id", "text config eos_token_id"), target.stopTokens.tokens(), name,
+                  "text config eos_token_id");
 }
 
 // The mask token a DFlash2 draft of a family whose drafts choose theirs

@@ -1,6 +1,7 @@
 #include "model/SafetensorsImage.hpp"
 
 #include "metal/abi/QuantFormat.h"
+#include "model/Gemma4.hpp"
 #include "model/StateLayout.hpp"
 #include "model/WeightLayout.hpp"
 #include "model/WeightStore.hpp"
@@ -144,6 +145,16 @@ public:
     const uint64_t bytes = rows * columns * sizeof(float);
     image_.descriptor(ggml::kF32, rows, columns, {}, {bytes, 0, 0}, module);
     floatRows(module, rows, columns, image_.section(bytes));
+  }
+
+  // A one-value tensor's F32 value (Gemma4's layer_scalar), widened from its
+  // bf16 storage.
+  void floatScalar(const std::string &name) {
+    const SourceTensor &tensor = require(name, {"BF16", "F32"}, {1});
+    image_.descriptor(ggml::kF32, 1, 1, {}, {sizeof(float), 0, 0}, name);
+    image_.copyAt(image_.section(sizeof(float)),
+                  rows(name, tensor, tensor.dtype == "BF16" ? ggml::kBF16 : ggml::kF32, 1, tensor.bytes),
+                  tensor.dtype == "BF16" ? Conversion::WidenToFloat32 : Conversion::None);
   }
 
   // The token table's rows, which the embedding kernel gathers: native rows
@@ -330,16 +341,50 @@ struct QuantizedModules {
   void alphaBeta(const std::string &, const std::string &) {}
   void router(const std::string &, uint64_t, uint64_t) {}
   void floatTensor(const std::string &, uint64_t, uint64_t) {}
+  void floatScalar(const std::string &) {}
   void embedding(const std::string &) {}
 
   ModuleNames names;
   std::vector<std::string> modules;
 };
 
+// The sections of a Gemma4 layer, in the order its loader reads them (the
+// GGUF planner's, Gemma4Gguf::layer): the input norm, the q and k projections
+// of the layer's geometry (and v's, unless the layer is global and shares its
+// K as V), the q and k norms of its head width, the output projection, the
+// norm after attention, the FFN's norm, its dense SwiGLU, the norm after the
+// FFN and the layer's F32 output scale.
+template <class Walk>
+void walkGemma4Layer(Walk &b, const QwenTargetDimensions &g, ModuleNames names, uint32_t index) {
+  const auto &gemma = static_cast<const Gemma4Layout &>(g);
+  const std::string prefix = modelPrefix(names) + "layers." + std::to_string(index) + ".";
+  const bool global = !gemma.kvLayout().windowed(index);
+  const uint32_t headDim = global ? gemma.globalAttentionHeadDimension : g.attentionHeadDimension;
+  const uint64_t kvRows = uint64_t{global ? gemma.globalAttentionKvHeads : g.attentionKvHeads} * headDim;
+  const uint64_t qRows = uint64_t{g.attentionQueryHeads} * headDim;
+  const std::string attention = prefix + "self_attn.";
+  b.norm(prefix + "input_layernorm", g.hiddenSize);
+  b.projection(attention + "q_proj", qRows, g.hiddenSize);
+  b.projection(attention + "k_proj", kvRows, g.hiddenSize);
+  if (!global) b.projection(attention + "v_proj", kvRows, g.hiddenSize);
+  b.norm(attention + "q_norm", headDim);
+  b.norm(attention + "k_norm", headDim);
+  b.projection(attention + "o_proj", g.hiddenSize, qRows);
+  b.norm(prefix + "post_attention_layernorm", g.hiddenSize);
+  b.norm(prefix + "pre_feedforward_layernorm", g.hiddenSize);
+  const std::string mlp = prefix + "mlp.";
+  b.projection(mlp + "gate_proj", g.intermediateSize, g.hiddenSize);
+  b.projection(mlp + "up_proj", g.intermediateSize, g.hiddenSize);
+  b.projection(mlp + "down_proj", g.hiddenSize, g.intermediateSize);
+  b.norm(prefix + "post_feedforward_layernorm", g.hiddenSize);
+  b.floatScalar(prefix + "layer_scalar");
+}
+
 // The sections of each image, in their order, which a Builder plans and
 // QuantizedModules names: a layer's, the head's and the embedding's.
 template <class Walk>
 void walkLayer(Walk &b, const QwenTargetDimensions &g, ModuleNames names, uint32_t index) {
+  if (g.dualAttentionGeometry) return walkGemma4Layer(b, g, names, index);
   const std::string prefix = modelPrefix(names) + "layers." + std::to_string(index) + ".";
   b.norm(prefix + "input_layernorm", g.hiddenSize);
   if (g.isFullAttentionLayer(index)) {
@@ -383,6 +428,9 @@ void walkLayer(Walk &b, const QwenTargetDimensions &g, ModuleNames names, uint32
 
 template <class Walk> void walkHead(Walk &b, const QwenTargetDimensions &g, ModuleNames names) {
   b.norm(modelPrefix(names) + "norm", g.hiddenSize);
+  // Gemma4 ties its embeddings: no lm_head, the table is the logits
+  // projection.
+  if (g.dualAttentionGeometry) return;
   b.projection(headName(names), g.vocabularySize, g.hiddenSize);
 }
 
