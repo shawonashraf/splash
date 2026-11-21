@@ -213,6 +213,11 @@ enum class PrefillTensor : uint32_t {
   DraftInverseFrequencies,
   RopeCos,
   RopeSin,
+  // A dual-geometry target's global layers' RoPE: their inverse frequencies
+  // and their tables, in the global geometry's pairs (Gemma4's).
+  GlobalTargetInverseFrequencies,
+  GlobalRopeCos,
+  GlobalRopeSin,
   ContextProjected,
   ContextHidden,
   ContextKv,
@@ -260,6 +265,8 @@ constexpr Tensor moeScratchTensor(size_t field) noexcept {
   case PrefillTensor::TargetPositions:
   case PrefillTensor::RopeCos:
   case PrefillTensor::RopeSin:
+  case PrefillTensor::GlobalRopeCos:
+  case PrefillTensor::GlobalRopeSin:
   case PrefillTensor::Captured:
   case PrefillTensor::DraftPositions:
   case PrefillTensor::DraftRopeCos:
@@ -325,6 +332,17 @@ public:
     rotaryInverseFrequencies(geometry.target.rotaryTheta, geometry.target.rotaryPairs,
                              geometry.target.ropeScaling,
                              {target, geometry.target.rotaryPairs});
+    // A dual-geometry target's global layers' inverse frequencies, in their
+    // pairs and base (Gemma4's).
+    if (geometry.target.globalAttentionHeadDimension) {
+      auto *global = static_cast<float *>(
+          get(PrefillTensor::GlobalTargetInverseFrequencies).contents());
+      if (!global)
+        throw std::logic_error("global RoPE frequencies are not CPU-visible");
+      const uint32_t pairs = geometry.target.globalAttentionHeadDimension / 2;
+      rotaryInverseFrequencies(geometry.target.globalRotaryTheta, pairs,
+                               geometry.target.ropeScaling, {global, pairs});
+    }
     for (uint32_t dim = 0; dim < geometry.draftRotaryPairs(); ++dim) {
       draft[dim] = std::pow(geometry.draft.rotaryTheta,
                             -static_cast<float>(dim) / geometry.draftRotaryPairs());
@@ -390,6 +408,9 @@ enum class DecodeTensor : uint32_t {
   DraftPositions,
   RopeCos,
   RopeSin,
+  // A dual-geometry target's global layers' RoPE tables (Gemma4's).
+  GlobalRopeCos,
+  GlobalRopeSin,
   ContextProjected,
   ContextHidden,
   ContextKv,

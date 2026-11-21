@@ -269,6 +269,8 @@ QwenTargetPrefillBuffers prefillBuffers(const PrefillArena &arena, uint32_t chun
   buffers.attentionOutput = arena.get(PrefillTensor::AttentionOutput, chunk);
   buffers.ropeCos = arena.get(PrefillTensor::RopeCos, chunk);
   buffers.ropeSin = arena.get(PrefillTensor::RopeSin, chunk);
+  buffers.ropeCosGlobal = arena.get(PrefillTensor::GlobalRopeCos, chunk);
+  buffers.ropeSinGlobal = arena.get(PrefillTensor::GlobalRopeSin, chunk);
   buffers.ropeInverseFrequencies = arena.get(PrefillTensor::TargetInverseFrequencies);
   buffers.chunkKeys = arena.get(PrefillTensor::ChunkKeys);
   buffers.chunkValues = arena.get(PrefillTensor::ChunkValues);
@@ -1163,6 +1165,22 @@ struct Runtime::Impl {
          .draft_rows = draftRows,
          .target_scale = geometry.target.ropeScaling.attentionFactor()},
         kPrefillRows, geometry.target.rotaryPairs);
+    // A dual-geometry target's global layers' table, in their pairs, from
+    // their inverse frequencies (Gemma4's); no draft rows again.
+    if (geometry.target.globalAttentionHeadDimension)
+      ops::RoPE::addTables(
+          graph, prefillArena->get(PrefillTensor::TargetPositions),
+          prefillArena->get(PrefillTensor::DraftPositions),
+          prefillArena->get(PrefillTensor::GlobalTargetInverseFrequencies),
+          prefillArena->get(PrefillTensor::DraftInverseFrequencies),
+          prefillArena->get(PrefillTensor::GlobalRopeCos),
+          prefillArena->get(PrefillTensor::GlobalRopeSin),
+          prefillArena->get(PrefillTensor::DraftRopeCos),
+          prefillArena->get(PrefillTensor::DraftRopeSin),
+          {.target_rows = targetRows,
+           .draft_rows = 0,
+           .target_scale = geometry.target.ropeScaling.attentionFactor()},
+          kPrefillRows, geometry.target.maxRotaryPairs());
   }
 
   // A constrained lane keeps its final prompt row, which prefill leaves at
@@ -1751,9 +1769,10 @@ struct Runtime::Impl {
       for (PrefillSequence &sequence : chunk.sequences) {
         sequence.queryOffset = queryOffset;
         sequence.kvOffset = kvOffset;
-        const uint64_t headRows = uint64_t{sequence.attentionStride} * geometry.target.attentionHeadDimension;
+        const uint64_t headRows =
+            uint64_t{sequence.attentionStride} * geometry.target.maxAttentionHeadDimension();
         queryOffset += bytesFor<uint16_t>(geometry.target.attentionQueryHeads * headRows);
-        kvOffset += bytesFor<uint16_t>(geometry.target.attentionKvHeads * headRows);
+        kvOffset += bytesFor<uint16_t>(geometry.target.maxKvWidth() * sequence.attentionStride);
         writePromptRows(*sequence.entry, sequence.part, sequence.rowBegin, c);
       }
       if (queryOffset > prefillArena->get(PrefillTensor::FullQueries).sizeBytes() ||
@@ -2226,6 +2245,8 @@ struct Runtime::Impl {
     buffers.attentionOutput = d(DecodeTensor::AttentionOutput);
     buffers.ropeCos = d(DecodeTensor::RopeCos);
     buffers.ropeSin = d(DecodeTensor::RopeSin);
+    buffers.ropeCosGlobal = d(DecodeTensor::GlobalRopeCos);
+    buffers.ropeSinGlobal = d(DecodeTensor::GlobalRopeSin);
     buffers.ropeInverseFrequencies = prefillArena->get(PrefillTensor::TargetInverseFrequencies);
     buffers.capturedTargetHidden = d(DecodeTensor::CapturedTargetHidden);
     buffers.finalHidden = d(DecodeTensor::FinalHidden);

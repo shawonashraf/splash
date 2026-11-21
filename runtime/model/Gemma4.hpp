@@ -58,6 +58,7 @@ struct Gemma4Layout final : QwenHybridLayout {
                           .layers = 60,
                           .hiddenSize = 5376,
                           .vocabularySize = 262'144,
+                          .packedFullWidth = 16384,
                           .attentionWidth = 8192,
                           .attentionQueryHeads = 32,
                           .attentionKvHeads = 16,
@@ -101,6 +102,14 @@ using Gemma4Weights = QwenTargetWeights<Gemma4Layout, Gemma4LayerWeights>;
 
 [[nodiscard]] Gemma4Weights loadGemma4Weights(metal::MetalBackend &backend, Gemma4Layout layout,
                                               const QwenTargetFiles &files);
+
+// The geometry's global layers' KV geometry and RoPE base, which the pages
+// hold in the sliding geometry's regions.
+inline void includeFamilyGeometry(QwenTargetGeometry &geometry, const Gemma4Layout &layout) {
+  geometry.globalAttentionKvHeads = layout.globalAttentionKvHeads;
+  geometry.globalAttentionHeadDimension = layout.globalAttentionHeadDimension;
+  geometry.globalRotaryTheta = layout.globalRotaryTheta;
+}
 
 // Its every layer's FFN is dense.
 [[nodiscard]] const ops::BlockMoeWeights *qwenMoeBlock(const Gemma4LayerWeights &) noexcept;

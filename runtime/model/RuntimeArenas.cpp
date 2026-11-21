@@ -57,15 +57,15 @@ prefillTensorBytes(const RuntimeGeometry &geometry,
                          geometry.target.intermediateSize));
   put(PrefillTensor::FullPacked,
       bytesFor<uint16_t>(uint64_t{kPrefillRows} *
-                         geometry.target.packedFullWidth));
+                         geometry.target.maxPackedWidth()));
   put(PrefillTensor::FullQueries,
       bytesFor<uint16_t>(uint64_t{geometry.target.attentionQueryHeads} *
                          kRaggedAttentionRows *
-                         geometry.target.attentionHeadDimension));
+                         geometry.target.maxAttentionHeadDimension()));
   put(PrefillTensor::FullAttention,
       bytesFor<uint16_t>(uint64_t{geometry.target.attentionQueryHeads} *
                          kRaggedAttentionRows *
-                         geometry.target.attentionHeadDimension));
+                         geometry.target.maxAttentionHeadDimension()));
   const ops::AttentionWorkspace attentionWorkspace =
       operators.prefillAttentionWorkspace(
           kPrefillRows, geometry.target.attentionQueryHeads,
@@ -74,7 +74,7 @@ prefillTensorBytes(const RuntimeGeometry &geometry,
   put(PrefillTensor::AttentionStatistics, attentionWorkspace.statisticsBytes);
   put(PrefillTensor::AttentionHidden,
       bytesFor<uint16_t>(uint64_t{kPrefillRows} *
-                         geometry.target.attentionWidth));
+                         geometry.target.maxAttentionWidth()));
   // The rows a mixer adds its output to, which the FFN adds to.
   if (geometry.target.mixersAddToHidden()) {
     put(PrefillTensor::GdnOutput, bytesFor<uint16_t>(gdnRows * geometry.target.hiddenSize));
@@ -93,6 +93,13 @@ prefillTensorBytes(const RuntimeGeometry &geometry,
       bytesFor<float>(uint64_t{kPrefillRows} * geometry.target.rotaryPairs));
   put(PrefillTensor::RopeSin,
       bytesFor<float>(uint64_t{kPrefillRows} * geometry.target.rotaryPairs));
+  // A dual-geometry target's global layers' RoPE tables (Gemma4's).
+  put(PrefillTensor::GlobalTargetInverseFrequencies,
+      bytesFor<float>(geometry.target.maxRotaryPairs()));
+  put(PrefillTensor::GlobalRopeCos,
+      bytesFor<float>(uint64_t{kPrefillRows} * geometry.target.maxRotaryPairs()));
+  put(PrefillTensor::GlobalRopeSin,
+      bytesFor<float>(uint64_t{kPrefillRows} * geometry.target.maxRotaryPairs()));
   put(PrefillTensor::ContextProjected,
       bytesFor<uint16_t>(uint64_t{kPrefillRows} * geometry.draft.hiddenSize));
   put(PrefillTensor::ContextHidden,
@@ -107,13 +114,11 @@ prefillTensorBytes(const RuntimeGeometry &geometry,
       bytesFor<float>(uint64_t{kPrefillRows} *
                       geometry.draftRotaryPairs()));
   put(PrefillTensor::ChunkKeys,
-      bytesFor<uint16_t>(uint64_t{geometry.target.attentionKvHeads} *
-                         kRaggedAttentionRows *
-                         geometry.target.attentionHeadDimension));
+      bytesFor<uint16_t>(uint64_t{geometry.target.maxKvWidth()} *
+                         kRaggedAttentionRows));
   put(PrefillTensor::ChunkValues,
-      bytesFor<uint16_t>(uint64_t{geometry.target.attentionKvHeads} *
-                         kRaggedAttentionRows *
-                         geometry.target.attentionHeadDimension));
+      bytesFor<uint16_t>(uint64_t{geometry.target.maxKvWidth()} *
+                         kRaggedAttentionRows));
   // The split partials and counters, the rotated rows and the int8 tile's
   // codes and scales of the largest prefill plan: the target's, and the
   // draft's context projections' on the draft's plans.
@@ -172,9 +177,8 @@ uint64_t gdnTapeSlotBytes(const RuntimeGeometry &geometry) noexcept {
          ops::gdnTapeLayerBytes(geometry.target.gdnShape());
 }
 static uint64_t decodeChunkLayerBytes(const RuntimeGeometry &geometry) noexcept {
-  return bytesFor<uint16_t>(uint64_t{geometry.target.attentionKvHeads} *
-                            kv::kVerifyChunkStride *
-                            geometry.target.attentionHeadDimension);
+  return bytesFor<uint16_t>(uint64_t{geometry.target.maxKvWidth()} *
+                            kv::kVerifyChunkStride);
 }
 
 std::array<uint64_t, decodeTensorCount>
@@ -206,11 +210,11 @@ decodeTensorBytes(const RuntimeGeometry &geometry,
   put(DecodeTensor::Intermediate,
       bytesFor<uint16_t>(r * geometry.target.intermediateSize));
   put(DecodeTensor::FullPacked,
-      bytesFor<uint16_t>(r * geometry.target.packedFullWidth));
+      bytesFor<uint16_t>(r * geometry.target.maxPackedWidth()));
   put(DecodeTensor::FullQueries,
       bytesFor<uint16_t>(uint64_t{geometry.target.attentionQueryHeads} *
                          kv::kVerifyChunkStride *
-                         geometry.target.attentionHeadDimension));
+                         geometry.target.maxAttentionHeadDimension()));
   const ops::AttentionWorkspace attentionWorkspace =
       operators.verifyAttentionWorkspacePerLane(
           geometry.target.attentionQueryHeads, geometry.target.kvLayout);
@@ -219,9 +223,9 @@ decodeTensorBytes(const RuntimeGeometry &geometry,
   put(DecodeTensor::FullAttention,
       bytesFor<uint16_t>(uint64_t{geometry.target.attentionQueryHeads} *
                          kv::kVerifyChunkStride *
-                         geometry.target.attentionHeadDimension));
+                         geometry.target.maxAttentionHeadDimension()));
   put(DecodeTensor::AttentionHidden,
-      bytesFor<uint16_t>(r * geometry.target.attentionWidth));
+      bytesFor<uint16_t>(r * geometry.target.maxAttentionWidth()));
   put(DecodeTensor::AttentionOutput,
       bytesFor<uint16_t>(r * geometry.target.hiddenSize));
   put(DecodeTensor::Positions, bytesFor<uint32_t>(r * 3));
@@ -230,6 +234,10 @@ decodeTensorBytes(const RuntimeGeometry &geometry,
       bytesFor<float>(r * geometry.target.rotaryPairs));
   put(DecodeTensor::RopeSin,
       bytesFor<float>(r * geometry.target.rotaryPairs));
+  put(DecodeTensor::GlobalRopeCos,
+      bytesFor<float>(r * geometry.target.maxRotaryPairs()));
+  put(DecodeTensor::GlobalRopeSin,
+      bytesFor<float>(r * geometry.target.maxRotaryPairs()));
   put(DecodeTensor::ContextProjected,
       bytesFor<uint16_t>(r * geometry.draft.hiddenSize));
   put(DecodeTensor::ContextHidden,

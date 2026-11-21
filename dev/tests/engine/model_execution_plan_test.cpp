@@ -450,7 +450,7 @@ void checkPrefillAttentionHistory() {
   sequence.rows = 300;
   const auto splitsAfter = [&](uint32_t history) {
     sequence.chunk.committed_tokens = history;
-    return model::prefillAttentionPlan(plans, geometry.target, sequence).splits;
+    return model::prefillAttentionPlan(plans, geometry.target, sequence, geometry.target.kvLayout).splits;
   };
   require(splitsAfter(65'536) > splitsAfter(0), "a chunk's attention plan does not follow its history");
 }

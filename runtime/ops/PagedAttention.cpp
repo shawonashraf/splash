@@ -77,23 +77,18 @@ constexpr std::array kCompiledAttention{
                       "_kv16_d256"},
     CompiledAttention{32, 16, 256, kv::Reads::EveryPage, false, false, 128, false, 0, "_kv16_g2_d256",
                       "_kv16_d256"},
-    // Gemma4's global layers: 32 query heads over 4 KV heads of 512, read from
-    // the same 16-of-256 pages (each 512 head spans two stored pseudo-heads),
+    // Gemma4's global layers: 32 query heads over 4 KV heads of 512, stored in
+    // the sliding geometry's 16-of-256 page regions (a 4x512 layer's region),
     // whole history, whole-head RoPE (256 pairs).
     CompiledAttention{32, 4, 512, kv::Reads::EveryPage, false, false, 256, false, 0, "_kv4_g8_d512",
-                      "_kv16_d256"},
+                      "_kv4_d512"},
 };
 
 // Whether a compiled geometry's pages are a layout's: its KV heads, head
-// dimension and value order. A dual-geometry layout's page holds more,
-// smaller heads than a global layer reads at once, so equal footprints match
-// too (Gemma4's: 16 of 256 store its 4 global heads of 512).
+// dimension and value order.
 bool storesLayout(const CompiledAttention &compiled, kv::Layout layout) {
-  return (compiled.kvHeads == layout.kvHeads && compiled.headDimension == layout.headDimension &&
-          kv::valuesTokenMajorFor(compiled.reads) == layout.valuesTokenMajor) ||
-         (uint64_t{compiled.kvHeads} * compiled.headDimension ==
-              uint64_t{layout.kvHeads} * layout.headDimension &&
-          kv::valuesTokenMajorFor(compiled.reads) == layout.valuesTokenMajor);
+  return compiled.kvHeads == layout.kvHeads && compiled.headDimension == layout.headDimension &&
+         kv::valuesTokenMajorFor(compiled.reads) == layout.valuesTokenMajor;
 }
 
 // The KV store kernels' suffix of a layout's KV heads, head dimension and

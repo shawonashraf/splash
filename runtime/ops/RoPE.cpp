@@ -15,7 +15,7 @@ namespace {
 // (kernels/shared/rope.metal).
 std::string tableKernel(uint32_t pairs) {
   if (pairs == SPLASH_TARGET_ROPE_PAIRS) return "rope_build_tables";
-  if (pairs == 64) return "rope_build_tables_p64";
+  if (pairs == 64 || pairs == 128 || pairs == 256) return "rope_build_tables_p" + std::to_string(pairs);
   throw std::invalid_argument("no RoPE table kernel for the target's rotary pairs");
 }
 

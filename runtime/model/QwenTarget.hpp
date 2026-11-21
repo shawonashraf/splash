@@ -111,6 +111,12 @@ struct QwenTargetGeometry final : QwenTargetDimensions {
   // GDN state layout.
   kv::Layout kvLayout{};
   GdnStateLayout stateLayout{};
+  // A dual-geometry target's global (non-windowed) layers' KV heads, head
+  // width and RoPE base (Gemma4's), which the pages store in the sliding
+  // geometry's regions: 0 for a single-geometry target.
+  uint32_t globalAttentionKvHeads = 0;
+  uint32_t globalAttentionHeadDimension = 0;
+  float globalRotaryTheta = 0.0F;
   // The scaling of the attention layers' RoPE the model is served with
   // (ModelDescriptor::ropeScaling).
   RopeScaling ropeScaling{};
@@ -142,6 +148,49 @@ struct QwenTargetGeometry final : QwenTargetDimensions {
             .windowTokens = kvLayout.windowed(attention) ? kvLayout.windowTokens : 0,
             .valueNorm = valueNormed,
             .sharedKv = valueNormed && !kvLayout.windowed(attention)};
+  }
+  // The KV geometry attention layer `attention` reads and stores with: the
+  // pages' own, or the global geometry's for a dual-geometry target's
+  // non-windowed layers, whose pages hold their 4x512 heads in the sliding
+  // geometry's 16x256 regions.
+  [[nodiscard]] constexpr kv::Layout attentionLayout(uint32_t attention) const noexcept {
+    if (!globalAttentionHeadDimension || kvLayout.windowed(attention)) return kvLayout;
+    kv::Layout global = kvLayout;
+    global.kvHeads = globalAttentionKvHeads;
+    global.headDimension = globalAttentionHeadDimension;
+    global.windowTokens = 0;
+    global.windowedLayers = 0;
+    return global;
+  }
+  // The head width of attention layer `attention`, and its rotated pairs.
+  [[nodiscard]] constexpr uint32_t layerHeadDimension(uint32_t attention) const noexcept {
+    return attentionLayout(attention).headDimension;
+  }
+  [[nodiscard]] constexpr uint32_t layerRotaryPairs(uint32_t attention) const noexcept {
+    return attentionLayout(attention).headDimension / 2;
+  }
+  // The widest the target's attention gets, for the arenas' sizing: the head
+  // width, the query width, the packed projection's width and the KV width of
+  // its widest geometry, and its most rotated pairs.
+  [[nodiscard]] constexpr uint32_t maxAttentionHeadDimension() const noexcept {
+    return std::max(attentionHeadDimension, globalAttentionHeadDimension);
+  }
+  [[nodiscard]] constexpr uint32_t maxAttentionWidth() const noexcept {
+    return attentionQueryHeads * maxAttentionHeadDimension();
+  }
+  [[nodiscard]] constexpr uint32_t maxPackedWidth() const noexcept {
+    if (!globalAttentionHeadDimension) return packedFullWidth;
+    const uint32_t globalKvRows = globalAttentionKvHeads * globalAttentionHeadDimension;
+    const uint32_t globalPacked = attentionQueryHeads * globalAttentionHeadDimension +
+                                  (valueNormed ? globalKvRows : 2 * globalKvRows);
+    return std::max(packedFullWidth, globalPacked);
+  }
+  [[nodiscard]] constexpr uint32_t maxKvWidth() const noexcept {
+    return std::max(attentionKvHeads * attentionHeadDimension,
+                    globalAttentionKvHeads * globalAttentionHeadDimension);
+  }
+  [[nodiscard]] constexpr uint32_t maxRotaryPairs() const noexcept {
+    return std::max(rotaryPairs, globalAttentionHeadDimension / 2);
   }
   [[nodiscard]] constexpr std::span<const uint32_t>
   captureLayers() const noexcept {
@@ -272,6 +321,9 @@ struct QwenTargetPrefillBuffers final {
   metal::MetalBuffer attentionOutput;
   metal::MetalBuffer ropeCos;
   metal::MetalBuffer ropeSin;
+  // A dual-geometry target's global layers' RoPE tables (Gemma4's).
+  metal::MetalBuffer ropeCosGlobal;
+  metal::MetalBuffer ropeSinGlobal;
   // The RoPE inverse frequencies the tables were made of (rotaryPairs).
   metal::MetalBuffer ropeInverseFrequencies;
   metal::MetalBuffer chunkKeys;
@@ -285,11 +337,13 @@ struct QwenTargetPrefillBuffers final {
 };
 
 // The attention plan of a prefill sequence's rows after the history its
-// chunk committed (sequence.chunk.committed_tokens): of a geometry's whole
-// layers by default, of its sliding layers with their window.
+// chunk committed (sequence.chunk.committed_tokens), over the attention
+// layer's `layout`, with its `variant`: of the whole history by default, of
+// the window its variant names.
 [[nodiscard]] ops::PrefillAttentionPlan prefillAttentionPlan(const ops::ExecutionPlans &plans,
                                                             const QwenTargetGeometry &geometry,
                                                             const QwenTargetPrefillSequence &sequence,
+                                                            kv::Layout layout,
                                                             ops::AttentionVariant variant = {});
 
 // A chunk of a prefill command: `rows` rows of its lanes' sequences, packed
@@ -324,6 +378,9 @@ struct QwenTargetVerifyBuffers final {
   metal::MetalBuffer attentionOutput;
   metal::MetalBuffer ropeCos;
   metal::MetalBuffer ropeSin;
+  // A dual-geometry target's global layers' RoPE tables (Gemma4's).
+  metal::MetalBuffer ropeCosGlobal;
+  metal::MetalBuffer ropeSinGlobal;
   metal::MetalBuffer ropeInverseFrequencies;
   metal::MetalBuffer capturedTargetHidden;
   metal::MetalBuffer finalHidden;
@@ -397,6 +454,10 @@ void includeDenseFfn(QwenTargetGeometry &geometry, ops::SwiGluProjections ffn);
 // Qwen3.8-Flash-Next's (model/Qwen4Exp.hpp).
 template <class Weights> void includeFamilyProjections(QwenTargetGeometry &, const Weights &) {}
 
+// A family's extra geometry a target's runtime needs (qwenTargetGeometry):
+// none by default; Gemma4's sets its global layers' geometry.
+template <class Layout> void includeFamilyGeometry(QwenTargetGeometry &, const Layout &) {}
+
 // The geometry of a target of `weights` whose DFlash2 draft reads the output
 // rows of `captureLayers` (DFlashDraftLayout::targetLayerIds): its layout's,
 // every projection its weights dispatch and the formats of its MoE blocks'
@@ -406,6 +467,7 @@ template <class Weights>
   QwenTargetGeometry geometry(weights.layout, captureLayers);
   geometry.kvLayout = weights.layout.kvLayout();
   geometry.stateLayout = weights.layout.gdnStateLayout();
+  includeFamilyGeometry(geometry, weights.layout);
   std::vector<const ops::BlockMoeWeights *> moeBlocks;
   for (const auto &layer : weights.layers) {
     includeMixer(geometry, layer.mixer);
@@ -534,11 +596,11 @@ protected:
     uint32_t rows;
     std::span<const SplashKvLayer> kvLayers;
     SpilledKvReads &spilled;
-    // Each sequence's attention plan, which every attention layer runs, and
-    // with a sliding window (kv::Layout::windowTokens) its windowed plan,
-    // which the sliding layers run instead.
-    std::vector<ops::PrefillAttentionPlan> attention{};
-    std::vector<ops::PrefillAttentionPlan> windowedAttention{};
+    // Each attention layer's plan of each sequence, and with a sliding
+    // window (kv::Layout::windowTokens) the windowed layers' windowed plan,
+    // which they run instead: attention[attention layer][sequence].
+    std::vector<std::vector<ops::PrefillAttentionPlan>> attention{};
+    std::vector<std::vector<ops::PrefillAttentionPlan>> windowedAttention{};
     std::optional<ops::MoePlan> moe{};
     // The layer's MoE buffers, which its routing (addPrefillLayer), the
     // layer's load and its routed work (addPrefillExperts) share.
@@ -563,9 +625,10 @@ protected:
     std::span<const kv::ChunkedPrefillParams> chunks;
     uint32_t lanes;
     uint32_t rows;
-    ops::VerifyAttentionPlan attention;
-    // With a sliding window, the plan of the sliding layers.
-    std::optional<ops::VerifyAttentionPlan> windowedAttention{};
+    // Each attention layer's plan, and with a sliding window the sliding
+    // layers' windowed plan, which they run instead.
+    std::vector<ops::VerifyAttentionPlan> attention{};
+    std::vector<ops::VerifyAttentionPlan> windowedAttention{};
     std::optional<ops::MoePlan> moe{};
     uint32_t gdnLayer = 0;
     uint32_t attentionLayer = 0;

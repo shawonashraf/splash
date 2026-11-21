@@ -45,6 +45,10 @@
 ROPE_BUILD_TABLES(rope_build_tables, SPLASH_TARGET_ROPE_PAIRS)
 // Rows of 64 pairs: whole heads of 128 dimensions.
 ROPE_BUILD_TABLES(rope_build_tables_p64, 64u)
+// Rows of 128 pairs: Gemma4's sliding layers' whole heads of 256 dimensions.
+ROPE_BUILD_TABLES(rope_build_tables_p128, 128u)
+// Rows of 256 pairs: its global layers' whole heads of 512 dimensions.
+ROPE_BUILD_TABLES(rope_build_tables_p256, 256u)
 #undef ROPE_BUILD_TABLES
 
 // The draft table rows of rope_build_tables for consecutive positions.
