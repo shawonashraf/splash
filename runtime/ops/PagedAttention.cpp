@@ -185,10 +185,10 @@ AttentionWorkspace attentionWorkspace(uint64_t rows, uint32_t headDimension) {
 // Verify scratch is sized once for the maximum split count of every lane, so
 // a lane's history-scaled partition never needs a reallocation.
 AttentionWorkspace verifyWorkspaceBound(uint32_t lanes, uint32_t queryHeads,
-                                        kv::Layout layout) {
+                                        kv::Layout layout, uint32_t headDimension = 0) {
   return attentionWorkspace(uint64_t{lanes} * kv::kVerifyRows *
                                 kv::kVerifyMaximumSplits * queryHeads,
-                            layout.headDimension);
+                            headDimension ? headDimension : layout.headDimension);
 }
 
 // A staging of `rows` rows of each of `heads` heads, `stride` rows apart:
@@ -215,8 +215,9 @@ Staging verifyStaging(uint32_t lanes, kv::Layout layout) {
 
 // A packed projection row: every query head's q and, gated, its gate, then
 // the K and V heads. The gates read each row's query heads only.
-uint64_t packedWidth(const CompiledAttention &compiled) {
-  return (uint64_t{compiled.queryHeads} * (compiled.gated ? 2 : 1) + uint64_t{compiled.kvHeads} * 2) *
+uint64_t packedWidth(const CompiledAttention &compiled, bool sharedKv = false) {
+  // A shared-KV row holds no values of their own (Gemma4's global layers).
+  return (uint64_t{compiled.queryHeads} * (compiled.gated ? 2 : 1) + uint64_t{compiled.kvHeads} * (sharedKv ? 1 : 2)) *
          compiled.headDimension;
 }
 uint64_t gateBytes(uint64_t rows, const CompiledAttention &compiled) {
@@ -385,7 +386,7 @@ VerifyAttentionPlan PagedAttention::verifyPlan(
 }
 
 AttentionWorkspace PagedAttention::prefillWorkspace(
-    uint32_t maximumRows, uint32_t queryHeads, kv::Layout layout) {
+    uint32_t maximumRows, uint32_t queryHeads, kv::Layout layout, uint32_t headDimension) {
   (void)compiledAttention(queryHeads, layout);
   if (!maximumRows || maximumRows > kv::kChunkedPrefillMaximumRows)
     throw std::invalid_argument("invalid attention workspace rows");
@@ -397,15 +398,15 @@ AttentionWorkspace PagedAttention::prefillWorkspace(
   for (uint32_t tiles = 1; tiles <= kv::prefillAttentionTiles(maximumRows); ++tiles)
     slots = std::max(slots, uint64_t{tiles} * mostSplits(tiles));
   return attentionWorkspace(slots * kv::kPrefillAttentionTileRows * queryHeads,
-                             layout.headDimension);
+                            headDimension ? headDimension : layout.headDimension);
 }
 
 AttentionWorkspace PagedAttention::verifyWorkspace(
-    uint32_t lanes, uint32_t queryHeads, kv::Layout layout) {
+    uint32_t lanes, uint32_t queryHeads, kv::Layout layout, uint32_t headDimension) {
   (void)compiledAttention(queryHeads, layout);
   if (!lanes || lanes > SPLASH_MAXIMUM_BATCH_WIDTH)
     throw std::invalid_argument("invalid attention workspace batch width");
-  return verifyWorkspaceBound(lanes, queryHeads, layout);
+  return verifyWorkspaceBound(lanes, queryHeads, layout, headDimension);
 }
 
 bool PagedAttention::compiles(uint32_t queryHeads, kv::Layout layout, bool gated, uint32_t rotaryPairs) {
@@ -428,7 +429,7 @@ void PagedAttention::addPrefillProjection(
   if (!tokens || !stride)
     throw std::invalid_argument("invalid paged prefill projection geometry");
   const Staging staging{layout.kvHeads, stride, tokens};
-  requireBytes(packed, uint64_t{tokens} * packedWidth(kernel) * 2, "attention q/k/v");
+  requireBytes(packed, uint64_t{tokens} * packedWidth(kernel, variant.sharedKv) * 2, "attention q/k/v");
   requireBytes(queries, staging.rowBytes(queryHeads / layout.kvHeads, layout.headDimension), "attention query");
   requireBytes(chunkKeys, staging.rowBytes(1, layout.headDimension), "attention key");
   requireBytes(chunkValues, staging.valueBytes(layout.headDimension), "attention value");
@@ -475,7 +476,7 @@ void PagedAttention::addVerifyProjection(
     throw std::invalid_argument("invalid paged verify projection geometry");
   const uint64_t rows = uint64_t{lanes} * kv::kVerifyRows;
   const Staging staging = verifyStaging(lanes, layout);
-  requireBytes(packed, rows * packedWidth(kernel) * 2, "attention q/k/v");
+  requireBytes(packed, rows * packedWidth(kernel, variant.sharedKv) * 2, "attention q/k/v");
   requireBytes(queries, staging.rowBytes(queryHeads / layout.kvHeads, layout.headDimension), "attention query");
   requireBytes(chunkKeys, staging.rowBytes(1, layout.headDimension), "attention key");
   requireBytes(chunkValues, staging.valueBytes(layout.headDimension), "attention value");

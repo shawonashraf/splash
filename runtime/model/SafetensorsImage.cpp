@@ -148,13 +148,11 @@ public:
   }
 
   // A one-value tensor's F32 value (Gemma4's layer_scalar), widened from its
-  // bf16 storage.
+  // bf16 storage, in a section of its own as every copied tensor.
   void floatScalar(const std::string &name) {
     const SourceTensor &tensor = require(name, {"BF16", "F32"}, {1});
-    image_.descriptor(ggml::kF32, 1, 1, {}, {sizeof(float), 0, 0}, name);
-    image_.copyAt(image_.section(sizeof(float)),
-                  rows(name, tensor, tensor.dtype == "BF16" ? ggml::kBF16 : ggml::kF32, 1, tensor.bytes),
-                  tensor.dtype == "BF16" ? Conversion::WidenToFloat32 : Conversion::None);
+    image_.copy(rows(name, tensor, tensor.dtype == "BF16" ? ggml::kBF16 : ggml::kF32, 1, tensor.bytes),
+                 tensor.dtype == "BF16" ? Conversion::WidenToFloat32 : Conversion::None);
   }
 
   // The token table's rows, which the embedding kernel gathers: native rows

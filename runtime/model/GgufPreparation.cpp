@@ -621,8 +621,10 @@ void writeGgufImage(metal::MetalBackend &backend, const metal::MetalBuffer &imag
   uint64_t staging = 0, ids = 0;
   for (const gguf::Copy &copy : plan.copies) {
     const bool decodes = copy.conversion == gguf::Conversion::DequantizeToFloat32;
+    // A bf16 widen reads its rows as 2-byte values (Gemma4's layer_scalar).
+    const bool widenBf16 = copy.conversion == gguf::Conversion::WidenToFloat32 && copy.source.rowBytes == 2;
     if (!copy.source.rows || !copy.source.rowBytes || copy.source.windows != 1 ||
-        (copy.conversion != gguf::Conversion::None && !decodes && copy.source.rowBytes % 4))
+        (copy.conversion != gguf::Conversion::None && !decodes && !widenBf16 && copy.source.rowBytes % 4))
       throw GgufError("invalid prepared weight copy");
     extents.emplace_back(copy.destination, copyBytes(copy));
     if (!decodes) continue;

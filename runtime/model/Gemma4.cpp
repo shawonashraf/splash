@@ -66,6 +66,13 @@ Gemma4Weights loadGemma4Weights(metal::MetalBackend &backend, Gemma4Layout layou
         {
           WeightFile file = gguf.embedding();
           result.tokenEmbedding = format.embedding(file, layout.vocabularySize, layout.hiddenSize);
+          // Tied embeddings: the head runs over the table's stored rows,
+          // decoded to fp32 as a float segment's.
+          result.logitsProjection = {layout.vocabularySize, layout.hiddenSize,
+                                     ops::BlockWeights{{ops::QuantizedSegment::rows(
+                                         result.tokenEmbedding.rows().formatId, layout.vocabularySize,
+                                         layout.hiddenSize, result.tokenEmbedding.rows().rows)}}};
+          result.logitsProjection.destination = ops::FloatOutput::Float32;
           file.finish();
           result.files.push_back(file.record());
         }

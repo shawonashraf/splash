@@ -69,7 +69,7 @@ prefillTensorBytes(const RuntimeGeometry &geometry,
   const ops::AttentionWorkspace attentionWorkspace =
       operators.prefillAttentionWorkspace(
           kPrefillRows, geometry.target.attentionQueryHeads,
-          geometry.target.kvLayout);
+          geometry.target.kvLayout, geometry.target.maxAttentionHeadDimension());
   put(PrefillTensor::AttentionPartials, attentionWorkspace.partialsBytes);
   put(PrefillTensor::AttentionStatistics, attentionWorkspace.statisticsBytes);
   put(PrefillTensor::AttentionHidden,
@@ -217,7 +217,8 @@ decodeTensorBytes(const RuntimeGeometry &geometry,
                          geometry.target.maxAttentionHeadDimension()));
   const ops::AttentionWorkspace attentionWorkspace =
       operators.verifyAttentionWorkspacePerLane(
-          geometry.target.attentionQueryHeads, geometry.target.kvLayout);
+          geometry.target.attentionQueryHeads, geometry.target.kvLayout,
+          geometry.target.maxAttentionHeadDimension());
   put(DecodeTensor::AttentionPartials, attentionWorkspace.partialsBytes);
   put(DecodeTensor::AttentionStatistics, attentionWorkspace.statisticsBytes);
   put(DecodeTensor::FullAttention,

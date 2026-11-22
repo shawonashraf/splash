@@ -82,14 +82,14 @@ MoePlan ExecutionPlans::moeDecode(MoeShape shape, uint32_t routerFormat, uint32_
 }
 
 AttentionWorkspace ExecutionPlans::prefillAttentionWorkspace(
-    uint32_t maximumRows, uint32_t queryHeads, kv::Layout layout) const {
-  return PagedAttention::prefillWorkspace(maximumRows, queryHeads, layout);
+    uint32_t maximumRows, uint32_t queryHeads, kv::Layout layout, uint32_t headDimension) const {
+  return PagedAttention::prefillWorkspace(maximumRows, queryHeads, layout, headDimension);
 }
 
 // The verify bound is linear in the lanes: one lane's is every width's share.
 AttentionWorkspace ExecutionPlans::verifyAttentionWorkspacePerLane(
-    uint32_t queryHeads, kv::Layout layout) const {
-  return PagedAttention::verifyWorkspace(1, queryHeads, layout);
+    uint32_t queryHeads, kv::Layout layout, uint32_t headDimension) const {
+  return PagedAttention::verifyWorkspace(1, queryHeads, layout, headDimension);
 }
 
 // The draft workspace is linear in the lanes: one lane's is every width's

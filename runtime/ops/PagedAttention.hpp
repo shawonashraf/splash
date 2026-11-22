@@ -313,11 +313,14 @@ public:
   // Prefill storage covers every sequence length up to maximumRows; sequences
   // in a ragged command reuse it serially. Verify storage covers all lanes at
   // the maximum split count. Either covers every variant's plans.
+  // `headDimension` bounds the workspace's rows for a layout wider than the
+  // one `layout` names (a dual-geometry target's global layers); 0 for it.
   [[nodiscard]] static AttentionWorkspace
   prefillWorkspace(uint32_t maximumRows, uint32_t queryHeads,
-                   kv::Layout layout);
+                   kv::Layout layout, uint32_t headDimension = 0);
   [[nodiscard]] static AttentionWorkspace
-  verifyWorkspace(uint32_t lanes, uint32_t queryHeads, kv::Layout layout);
+  verifyWorkspace(uint32_t lanes, uint32_t queryHeads, kv::Layout layout,
+                  uint32_t headDimension = 0);
   // Whether the compiled geometry of `queryHeads` over a layout's KV heads
   // (kCompiledAttention) computes attention as a target's layout states it:
   // gated or not, rotating `rotaryPairs` pairs. Throws for a geometry with

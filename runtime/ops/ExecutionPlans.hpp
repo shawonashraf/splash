@@ -52,9 +52,10 @@ public:
   // one. Decode arenas use a per-lane stride of
   // max_B ceil(requiredBytes(B)/B), independently for each scratch field.
   [[nodiscard]] AttentionWorkspace prefillAttentionWorkspace(
-      uint32_t maximumRows, uint32_t queryHeads, kv::Layout layout) const;
+      uint32_t maximumRows, uint32_t queryHeads, kv::Layout layout,
+      uint32_t headDimension = 0) const;
   [[nodiscard]] AttentionWorkspace verifyAttentionWorkspacePerLane(
-      uint32_t queryHeads, kv::Layout layout) const;
+      uint32_t queryHeads, kv::Layout layout, uint32_t headDimension = 0) const;
   [[nodiscard]] DraftAttentionWorkspace draftAttentionWorkspacePerLane(
       DraftAttentionShape shape) const;
   [[nodiscard]] MoeWorkspace moePrefillWorkspace(

@@ -7,6 +7,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 
+#include <cstdio>
 #include <algorithm>
 #include <cstring>
 #include <sstream>

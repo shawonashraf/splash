@@ -181,6 +181,8 @@ struct QwenTargetGeometry final : QwenTargetDimensions {
   [[nodiscard]] constexpr uint32_t maxPackedWidth() const noexcept {
     if (!globalAttentionHeadDimension) return packedFullWidth;
     const uint32_t globalKvRows = globalAttentionKvHeads * globalAttentionHeadDimension;
+    // The global layers share their keys as values (valueNormed), so their
+    // packed rows hold no value heads of their own.
     const uint32_t globalPacked = attentionQueryHeads * globalAttentionHeadDimension +
                                   (valueNormed ? globalKvRows : 2 * globalKvRows);
     return std::max(packedFullWidth, globalPacked);
