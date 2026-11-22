@@ -1346,6 +1346,28 @@ def main():
                 f"cannot load the tokenizer of {args.model}: "
                 f"{type(error).__name__}: {error}"
             ) from error
+        # Gemma4's config names several EOS ids ([1, 106, 50]) while its
+        # tokenizer defaults to the first; the engine stops at the chat
+        # format's turn end, so prefer an EOS id that encodes to a stop.
+        import json as _json
+
+        eos_ids = None
+        for candidate in (model_root / "config.json", model_root / "target" / "generation_config.json"):
+            if candidate.exists():
+                eos_ids = _json.loads(candidate.read_text()).get("eos_token_id")
+                if eos_ids is not None:
+                    break
+        if eos_ids is not None:
+            eos_ids = eos_ids if isinstance(eos_ids, list) else [eos_ids]
+            stop_ids = {
+                tokenizer.encode(stop, add_special_tokens=False)[0]
+                for stop in family.chat_format.stop_tokens
+            }
+            if tokenizer.eos_token_id not in stop_ids:
+                for eos_id in eos_ids:
+                    if eos_id in stop_ids:
+                        tokenizer.eos_token_id = eos_id
+                        break
         validate_tokenizer(tokenizer, family.chat_format)
         thinking_end = thinking_end_tokens(
             tokenizer, args.thinking_end_text, family.chat_format

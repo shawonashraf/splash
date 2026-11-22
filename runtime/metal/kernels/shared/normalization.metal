@@ -102,6 +102,59 @@ NORM_RMS(norm_rms, bfloat)
 NORM_RMS(norm_rms_f32, float)
 #undef NORM_RMS
 
+// Gemma4's post-sublayer norms: the norm of `input` added to `residual` in
+// one pass (output may alias input or residual; each threadgroup writes only
+// its own row).
+template <class W>
+inline void norm_rms_residual_row(device const bfloat *input, device const W *weight,
+                                  device const bfloat *residual, device bfloat *output,
+                                  uint width, uint row, uint thread_index, uint lane,
+                                  uint simd_group, threadgroup float *reductions) {
+#pragma clang fp reassociate(off)
+  if (width <= kNormStreamingWidth) {
+    const float inverse = rms_inverse(input + row * width, width, reductions,
+                                      thread_index, lane, simd_group);
+    for (uint column = thread_index; column < width; column += kNormThreads)
+      output[row * width + column] =
+          bfloat((float(input[row * width + column]) * inverse) * float(weight[column]) +
+                 float(residual[row * width + column]));
+    return;
+  }
+  device const bfloat *row_input = input + row * width;
+  bfloat x[kNormColumns];
+  W w[kNormColumns];
+  load_norm_chunk(row_input, width, 0, thread_index, x);
+  load_norm_chunk(weight, width, 0, thread_index, w);
+  const float inverse_rms = rms_inverse_of(x, row_input, width, reductions,
+                                           thread_index, lane, simd_group);
+  for (uint begin = 0; begin < width; begin += kNormChunk) {
+    if (begin) {
+      load_norm_chunk(row_input, width, begin, thread_index, x);
+      load_norm_chunk(weight, width, begin, thread_index, w);
+    }
+    for (uint i = 0; i < kNormColumns; ++i) {
+      const uint column = begin + thread_index + kNormThreads * i;
+      if (column < width)
+        output[row * width + column] =
+            bfloat((float(x[i]) * inverse_rms) * float(w[i]) +
+                   float(residual[row * width + column]));
+    }
+  }
+}
+#define NORM_RMS_RESIDUAL(Name, W) \
+  kernel void Name(device const bfloat *input [[buffer(0)]], \
+      device const W *weight [[buffer(1)]], device const bfloat *residual [[buffer(2)]], \
+      device bfloat *output [[buffer(3)]], constant uint &width [[buffer(4)]], \
+      uint row [[threadgroup_position_in_grid]], \
+      uint tid [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]], \
+      uint sg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float reductions[8]; \
+    norm_rms_residual_row(input, weight, residual, output, width, row, tid, lane, sg, reductions); \
+  }
+NORM_RMS_RESIDUAL(norm_rms_residual, bfloat)
+NORM_RMS_RESIDUAL(norm_rms_residual_f32, float)
+#undef NORM_RMS_RESIDUAL
+
 // Plain norms of few rows of at most 2048 columns (ops/Normalization.cpp)
 // load each row once into threadgroup memory, a vector per thread of a
 // 1024-thread group, and scale it from there instead of reading it from

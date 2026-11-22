@@ -74,6 +74,21 @@ struct QwenTargetDimensions {
   // The final logit softcap s, applied as s * tanh(l / s) to the logits; 0
   // for none (Gemma4's is 30).
   float logitSoftcapping = 0.0F;
+  // The token embeddings' multiplier (Gemma4's sqrt(hidden_size)); 1 for
+  // none.
+  float embeddingScale = 1.0F;
+  // Whether each sublayer's output is RMS-normed before its residual add,
+  // with its own norms — the layer's post-attention norm after the mixer and
+  // its post-FFN norm after the FFN, and the FFN's input norm the layer's own
+  // (pre_feedforward_layernorm) — as Gemma4's layers are, where the other
+  // families add each sublayer's raw output to the residual and norm before
+  // the sublayer instead.
+  bool postSublayerNorms = false;
+  // The dense FFN gates with GELU (tanh) instead of SiLU (Gemma4).
+  bool geluFfn = false;
+  // The fraction of a dual-geometry target's global heads' dimension pairs
+  // that RoPE rotates (Gemma4's global partial_rotary_factor 0.25); 1 for all.
+  float globalPartialRotaryFactor = 1.0F;
   // The token whose row a DFlash2 draft's mask rows read
   // (dflash_config.mask_token_id). A family whose vocabulary keeps none for
   // it (Flint's) names instead the tokens its drafts choose theirs among,

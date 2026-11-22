@@ -22,6 +22,7 @@ from .chat_templates import (
     RESERVED_TEMPLATE_KWARGS,
     render_chat_template,
     template_options,
+    trailing_kind,
 )
 from .diagnostics import print_status
 from .documents import render_files
@@ -102,14 +103,15 @@ COMPLETION_DEFAULT_MAX_TOKENS = 16
 IMAGE_RENDER_MARKER = f"__splash_image_{secrets.token_hex(16)}__"
 
 
-def _generation_prompt(probed, rendered, tokens, think_start=THINK_START, think_end=THINK_END):
+def _generation_prompt(probed, rendered, tokens, think_start=THINK_START, think_end=THINK_END, allow_empty=False):
     """Whether the generation prompt opens a think block, and how many of the
     prompt's last tokens it is (zero where they differ from its tokens).
     `probed` is its text and tokens, as the startup probe found them for the
     request's template options, and the rendered prompt must end with that
-    text."""
+    text. An empty prompt is only allowed after a tool result
+    (`allow_empty`), where a template may leave the model's turn open."""
     text, ids = probed
-    if not text or not rendered.endswith(text):
+    if not rendered.endswith(text) or (not text and not allow_empty):
         raise APIError(
             400, "chat template must end with an assistant generation prefix"
         )
@@ -776,12 +778,14 @@ class Frontend:
         remaining_request_time(deadline)
         thinking, generation_prompt_tokens = False, 0
         if add_generation_prompt:
+            trailing = trailing_kind(prompt.messages)
             thinking, generation_prompt_tokens = _generation_prompt(
-                chat_template.generation_prompt(template),
+                chat_template.generation_prompt(template, trailing),
                 rendered,
                 tokens,
                 self.chat_format.think_start,
                 self.chat_format.think_end,
+                allow_empty=trailing == "tool",
             )
         return RenderedPrompt(
             rendered, tokens, images, positions, thinking, generation_prompt_tokens

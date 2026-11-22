@@ -111,6 +111,9 @@ PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv2_g16, 2, 16, 256, 0, bfloat,
 PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv16_g2_d256, 16, 2, 256, 0, bfloat, false)
 PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv16_g2_d256_w1023, 16, 2, 256, 1023, bfloat, false)
 PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv4_g8_d512, 4, 8, 512, 0, bfloat, false)
+PAGED_PREFILL_SPLIT(prefill_attention_q8_split_kv4_g8_d512_p64, 4, 8, 512, 0, int8_t, false)
+PAGED_PREFILL_SPLIT(prefill_attention_q8q_split_kv4_g8_d512_p64, 4, 8, 512, 0, int8_t, true)
+PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv4_g8_d512_p64, 4, 8, 512, 0, bfloat, false)
 PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv4_g8_d128, 4, 8, 128, 0, bfloat, false)
 PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv4_g8_d128_w512, 4, 8, 128, 512, bfloat, false)
 #undef PAGED_PREFILL_SPLIT
@@ -153,6 +156,7 @@ PAGED_PREFILL_REDUCE(prefill_attention_reduce_kv2_g16, 2, 16, 256, 0)
 PAGED_PREFILL_REDUCE(prefill_attention_reduce_kv16_g2_d256, 16, 2, 256, 0)
 PAGED_PREFILL_REDUCE(prefill_attention_reduce_kv16_g2_d256_w1023, 16, 2, 256, 1023)
 PAGED_PREFILL_REDUCE(prefill_attention_reduce_kv4_g8_d512, 4, 8, 512, 0)
+PAGED_PREFILL_REDUCE(prefill_attention_reduce_kv4_g8_d512_p64, 4, 8, 512, 0)
 PAGED_PREFILL_SINK_REDUCE(prefill_attention_reduce_kv4_g8_d128_sinks, 4, 8, 128, 0)
 PAGED_PREFILL_SINK_REDUCE(prefill_attention_reduce_kv4_g8_d128_w512_sinks, 4, 8, 128, 512)
 #undef PAGED_PREFILL_SINK_REDUCE

@@ -182,12 +182,15 @@ LinearPlan Linear::plan(LinearWorkload w, const Projection &p, const Projection 
 }
 
 LinearPlan Linear::decodePlan(const Projection &p, uint32_t lanes, LinearEpilogue epilogue,
-                              const Projection *gate) const {
-  return plan(decode({p.outputSize, p.inputSize}, lanes, epilogue), p, gate);
+                              const Projection *gate, bool geluGate) const {
+  LinearWorkload w = decode({p.outputSize, p.inputSize}, lanes, epilogue);
+  w.geluGate = geluGate;
+  return plan(w, p, gate);
 }
 LinearPlan Linear::prefillPlan(const Projection &p, uint32_t rows, LinearEpilogue epilogue,
-                               uint32_t chunkRows) const {
-  const LinearWorkload w{{p.outputSize, p.inputSize}, rows, LinearPhase::Prefill, epilogue};
+                               uint32_t chunkRows, bool geluGate) const {
+  LinearWorkload w{{p.outputSize, p.inputSize}, rows, LinearPhase::Prefill, epilogue};
+  w.geluGate = geluGate;
   if (!chunkRows || chunkRows == rows) return plan(w, p);
   if (rows > chunkRows) throw std::invalid_argument("a prefill plan takes rows of its chunk");
   const LinearPlan chunk = plan({w.matrix, chunkRows, LinearPhase::Prefill, epilogue}, p);
@@ -278,13 +281,13 @@ void Linear::addPrefillResidual(metal::CommandGraph &graph, metal::MetalBuffer i
 }
 void Linear::addPrefillSwiGlu(metal::CommandGraph &graph, const SwiGluProjections &ffn,
                               const PrefillFfnBuffers &b, metal::MetalBuffer residual, metal::MetalBuffer output,
-                              uint32_t rows, uint32_t chunkRows) const {
+                              uint32_t rows, uint32_t chunkRows, bool geluGate) const {
   const PreparedInput normalized = add(graph, {.input = b.normalized, .output = b.gateScratch, .scratch = b.scratch},
                                        *ffn.gate, prefillPlan(*ffn.gate, rows, LinearEpilogue::None, chunkRows));
   add(graph,
       {.input = b.normalized, .output = b.intermediate, .gateScratch = b.gateScratch, .scratch = b.scratch,
        .prepared = normalized},
-      *ffn.up, prefillPlan(*ffn.up, rows, LinearEpilogue::UpWithGate, chunkRows));
+      *ffn.up, prefillPlan(*ffn.up, rows, LinearEpilogue::UpWithGate, chunkRows, geluGate));
   addPrefillResidual(graph, b.intermediate, *ffn.down, residual, output, rows, b.scratch, chunkRows);
 }
 

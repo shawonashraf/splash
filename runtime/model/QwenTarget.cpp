@@ -78,7 +78,8 @@ QwenTarget::QwenTarget(const QwenTargetWeightsBase &weights, const QwenTargetGeo
         globalCompiles = ops::PagedAttention::compiles(geometry_.attentionQueryHeads,
                                                        geometry_.attentionLayout(attention),
                                                        geometry_.attentionGate,
-                                                       geometry_.globalAttentionHeadDimension / 2);
+                                                       geometry_.layerRotaryPairs(attention),
+                                                       geometry_.attentionVariant(attention));
     if (!globalCompiles)
       throw std::invalid_argument("no attention kernel for the target's global geometry");
   }
@@ -117,8 +118,14 @@ void QwenTarget::addEmbedding(metal::CommandGraph &graph,
                               metal::MetalBuffer tokens,
                               metal::MetalBuffer hidden,
                               uint32_t rows) const {
-  ops::Embedding::add(graph, std::move(tokens), weightsBase_.tokenEmbedding, std::move(hidden),
-                      rows);
+  ops::Embedding::add(graph, tokens, weightsBase_.tokenEmbedding, hidden, rows);
+  // Gemma4's scaled word embedding: the token rows times sqrt(hidden).
+  if (geometry_.embeddingScale != 1.0F) {
+    constexpr uint32_t kThreads = metal::CommandGraph::kDefaultThreads;
+    const uint64_t count = uint64_t{rows} * geometry_.hiddenSize;
+    graph.add("scale_rows_bf16", {std::move(hidden)}, ScaleRowsParams{geometry_.embeddingScale, static_cast<uint32_t>(count)},
+              {(count + kThreads - 1) / kThreads, 1, 1}, {kThreads, 1, 1});
+  }
 }
 
 void QwenTarget::addStateCommit(metal::CommandGraph &, QwenTargetCommitBuffers buffers, uint32_t lanes) const {
@@ -306,8 +313,9 @@ void QwenTarget::addPrefillMixer(PrefillStep &step, const QwenAttentionWeights &
   if (!blocks.empty() && blocks.size() != step.sequences.size())
     throw std::invalid_argument("Qwen prefill attention blocks do not match its sequences");
   // A layer that outputs its read rows alone adds its output to their
-  // residual rows, which it gathers.
-  if (!step.readRows.empty() && !output.residual)
+  // residual rows, which it gathers; a post-sublayer-norm layer (Gemma4)
+  // outputs its mixer's rows alone and adds the residual after its norm.
+  if (!step.readRows.empty() && !output.residual && !geometry_.postSublayerNorms)
     throw std::logic_error("a Qwen prefill layer that outputs its read rows alone has no residual rows");
   const auto u16Rows = [&](const metal::MetalBuffer &buffer, const QwenTargetPrefillSequence &sequence,
                            uint32_t width) {
@@ -374,9 +382,10 @@ void QwenTarget::addPrefillMixer(PrefillStep &step, const QwenAttentionWeights &
         1, sequence.attentionStride, geometry_.attentionQueryHeads, layout);
   }
   // The read rows' residual rows, gathered into the normalized rows the
-  // input projection has read.
+  // input projection has read, unless the layer norms its mixer's output
+  // before adding them itself.
   metal::MetalBuffer residual = std::move(output.residual);
-  if (!step.readRows.empty()) {
+  if (!step.readRows.empty() && residual) {
     for (uint32_t row = 0; row < step.readRows.size(); ++row)
       ops::RowCopy::add(step.graph, residual, {step.readRows[row], geometry_.hiddenSize, 0}, b.normalized,
                         {row, geometry_.hiddenSize, 0}, 1, geometry_.hiddenSize);
@@ -474,7 +483,7 @@ void QwenTarget::addPrefillDenseFfn(PrefillStep &step, uint32_t index, const ops
     step.aneFfn->add(step.graph, index, buffers, std::move(residual), std::move(output), rows);
   else
     operators_.linear().addPrefillSwiGlu(step.graph, ffn, buffers, std::move(residual), std::move(output), rows,
-                                         step.rows);
+                                         step.rows, geometry_.geluFfn);
 }
 
 void QwenTarget::addPrefillMoeRouting(PrefillStep &step, const ops::NormWeights &norm,
@@ -491,7 +500,7 @@ void QwenTarget::addVerifyDenseFfn(VerifyStep &step, const ops::NormWeights &nor
   const QwenTargetVerifyBuffers &b = step.buffers;
   const ops::Linear &linear = operators_.linear();
   const ops::LinearPlan gateUpPlan =
-      linear.decodePlan(*ffn.up, step.lanes, ops::LinearEpilogue::GateUp, ffn.gate);
+      linear.decodePlan(*ffn.up, step.lanes, ops::LinearEpilogue::GateUp, ffn.gate, geometry_.geluFfn);
   const ops::PreparedInput normalized =
       ops::Normalization::addRms(step.graph, residual, norm, b.normalized, geometry_.hiddenSize, step.rows,
                                  b.linearScratch, gateUpPlan.input());
@@ -586,6 +595,25 @@ public:
       const Layer &layer = weights_.layers[index];
       const metal::MetalBuffer input = buffers.hidden[index & 1];
       const metal::MetalBuffer output = buffers.hidden[(index & 1) ^ 1];
+      if constexpr (requires { layer.postFfnNorm; }) {
+        if (geometry_.postSublayerNorms) {
+          const metal::MetalBuffer attention = std::visit(
+              [&](const auto &mixer) {
+                const ops::PreparedInput normalized = ops::Normalization::addRms(
+                    step.graph, input, layer.inputNorm, buffers.normalized, geometry_.hiddenSize, step.rows,
+                    buffers.linearScratch, decodeInput(mixer.inputProjection, step.lanes));
+                const BlockOutput block{mixerOutput(buffers, mixer), {}};
+                addVerifyMixer(step, mixer, normalized, block);
+                return block.rows;
+              },
+              layer.mixer);
+          ops::Normalization::addRmsResidual(step.graph, attention, layer.postAttentionNorm, input, output,
+                                             geometry_.hiddenSize, step.rows);
+          addVerifyFfnPostNormed(step, layer, output);
+          addLayerOutputScale(step.graph, layer, output, step.rows);
+          continue;
+        }
+      }
       const metal::MetalBuffer residual = std::visit(
           [&](const auto &mixer) {
             const ops::PreparedInput normalized = ops::Normalization::addRms(
@@ -629,6 +657,14 @@ private:
     const metal::MetalBuffer input = b.hidden[index & 1];
     planOutputRows(step, index);
     ops::Normalization::addRms(step.graph, input, layer.inputNorm, b.normalized, geometry_.hiddenSize, step.rows);
+    const metal::MetalBuffer output = step.readRows.empty() ? b.hidden[(index & 1) ^ 1] : input;
+    if constexpr (requires { layer.postFfnNorm; }) {
+      if (geometry_.postSublayerNorms) {
+        addPrefillLayerPostNormed(step, index, layer, input, output);
+        addLayerOutputScale(step.graph, layer, output, step.rows);
+        return;
+      }
+    }
     const metal::MetalBuffer residual = std::visit(
         [&](const auto &mixer) {
           const BlockOutput block{mixerOutput(b, mixer), input};
@@ -636,9 +672,44 @@ private:
           return block.rows;
         },
         layer.mixer);
-    const metal::MetalBuffer output = step.readRows.empty() ? b.hidden[(index & 1) ^ 1] : input;
     addPrefillFfn(step, index, layer, residual, output);
     addLayerOutputScale(step.graph, layer, output, step.rows);
+  }
+  // Gemma4's layer: the mixer's output is normed (post-attention norm) before
+  // its residual add, and the FFN's (pre-feedforward norm, FFN, post-FFN
+  // norm) likewise, into `output`.
+  void addPrefillLayerPostNormed(PrefillStep &step, uint32_t index, const Layer &layer,
+                                 metal::MetalBuffer input, metal::MetalBuffer output) const {
+    const QwenTargetPrefillBuffers &b = step.buffers;
+    const metal::MetalBuffer attention = std::visit(
+        [&](const auto &mixer) {
+          const BlockOutput block{mixerOutput(b, mixer), {}};
+          addPrefillMixer(step, mixer, block);
+          return block.rows;
+        },
+        layer.mixer);
+    metal::MetalBuffer residual = input;
+    if (!step.readRows.empty()) {
+      for (uint32_t row = 0; row < step.readRows.size(); ++row)
+        ops::RowCopy::add(step.graph, input, {step.readRows[row], geometry_.hiddenSize, 0}, b.normalized,
+                          {row, geometry_.hiddenSize, 0}, 1, geometry_.hiddenSize);
+      residual = b.normalized;
+    }
+    const uint32_t rows = step.outputRows();
+    ops::Normalization::addRmsResidual(step.graph, attention, layer.postAttentionNorm, residual, output,
+                                       geometry_.hiddenSize, rows);
+    ops::Normalization::addRms(step.graph, output, layer.ffnNorm, b.normalized, geometry_.hiddenSize, rows);
+    const metal::MetalBuffer ffnOut = b.attentionHidden;
+    const ops::PrefillFfnBuffers buffers = b.ffn();
+    if (step.aneFfn && step.readRows.empty())
+      step.aneFfn->add(step.graph, index, buffers, b.normalized, ffnOut, rows);
+    else if (const std::optional<ops::SwiGluProjections> dense = denseFfn(layer))
+      operators_.linear().addPrefillSwiGlu(step.graph, *dense, buffers, b.normalized, ffnOut, rows, step.rows,
+                                           geometry_.geluFfn);
+    else
+      throw std::logic_error("a post-sublayer-norm layer without a dense FFN");
+    ops::Normalization::addRmsResidual(step.graph, ffnOut, layer.postFfnNorm, output, output,
+                                       geometry_.hiddenSize, rows);
   }
   [[nodiscard]] const ops::BlockMoeWeights *moe(uint32_t index) const { return qwenMoeBlock(weights_.layers[index]); }
   void addPrefillExperts(PrefillStep &step, uint32_t index) const {
@@ -669,6 +740,30 @@ private:
       addVerifyDenseFfn(step, layer.postAttentionNorm, *dense, std::move(residual), std::move(output));
     else
       addVerifyMoe(step, layer.postAttentionNorm, *qwenMoeBlock(layer), std::move(residual), std::move(output));
+  }
+  // Gemma4's FFN: the layer's own pre-feedforward norm over the mixer's summed
+  // output `h`, the dense FFN without a residual, then the post-FFN norm added
+  // to `h`, into `output` (which may alias `h`).
+  void addVerifyFfnPostNormed(VerifyStep &step, const Layer &layer, metal::MetalBuffer h) const {
+    const QwenTargetVerifyBuffers &b = step.buffers;
+    const ops::Linear &linear = operators_.linear();
+    const std::optional<ops::SwiGluProjections> dense = denseFfn(layer);
+    if (!dense) throw std::logic_error("a post-sublayer-norm layer without a dense FFN");
+    const ops::LinearPlan gateUpPlan =
+        linear.decodePlan(*dense->up, step.lanes, ops::LinearEpilogue::GateUp, dense->gate, geometry_.geluFfn);
+    const ops::PreparedInput normalized =
+        ops::Normalization::addRms(step.graph, h, layer.ffnNorm, b.normalized, geometry_.hiddenSize, step.rows,
+                                   b.linearScratch, gateUpPlan.input());
+    const metal::MetalBuffer ffnOut = b.attentionHidden;
+    linear.add(step.graph,
+               {.input = b.normalized, .output = b.denseIntermediate, .gateScratch = b.denseGateScratch,
+                .scratch = b.linearScratch, .prepared = normalized},
+               *dense->up, gateUpPlan, dense->gate);
+    linear.add(step.graph,
+               {.input = b.denseIntermediate, .output = ffnOut, .scratch = b.linearScratch},
+               *dense->down, linear.decodePlan(*dense->down, step.lanes));
+    ops::Normalization::addRmsResidual(step.graph, ffnOut, layer.postFfnNorm, h, h,
+                                       geometry_.hiddenSize, step.rows);
   }
 
   // A family's per-layer output scale (Gemma4's layer_scalar) over the

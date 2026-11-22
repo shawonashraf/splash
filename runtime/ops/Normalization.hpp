@@ -37,6 +37,11 @@ public:
                               uint32_t width, uint32_t rows,
                               LinearScratch scratch = {},
                               LinearInput layout = LinearInput::Plain);
+  // The RMS norm of `input` added to `residual` (Gemma4's post-sublayer
+  // norms); `output` may alias either input.
+  static void addRmsResidual(metal::CommandGraph &graph, metal::MetalBuffer input,
+                             const NormWeights &weight, metal::MetalBuffer residual,
+                             metal::MetalBuffer output, uint32_t width, uint32_t rows);
 };
 
 } // namespace splash::ops

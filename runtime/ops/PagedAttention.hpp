@@ -129,6 +129,10 @@ struct AttentionVariant final {
   // global layers, which store no values of their own).
   bool valueNorm = false;
   bool sharedKv = false;
+  // Whether the layer rotates only part of its heads (Gemma4's global layers,
+  // whose partial_rotary_factor 0.25 rotates the leading 64 of their 256
+  // pairs); false rotates whole heads.
+  bool partialRotary = false;
   bool operator==(const AttentionVariant &) const = default;
 };
 
@@ -323,10 +327,10 @@ public:
                   uint32_t headDimension = 0);
   // Whether the compiled geometry of `queryHeads` over a layout's KV heads
   // (kCompiledAttention) computes attention as a target's layout states it:
-  // gated or not, rotating `rotaryPairs` pairs. Throws for a geometry with
-  // no kernels.
+  // gated or not, rotating `rotaryPairs` pairs, under `variant`. Throws for a
+  // geometry with no kernels.
   [[nodiscard]] static bool compiles(uint32_t queryHeads, kv::Layout layout, bool gated,
-                                     uint32_t rotaryPairs);
+                                     uint32_t rotaryPairs, AttentionVariant variant = {});
   // The split and reduce kernels' name suffix of the compiled geometry of
   // `queryHeads` over `layout`, with a variant's window: the geometry's
   // suffix, then _w<window> for a windowed variant.

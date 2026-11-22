@@ -61,9 +61,11 @@ uint32_t segmentColumns(const Projection &p) {
 
 // The kernel name suffix of an epilogue and the buffer it reads besides the
 // input (the output for a plain projection, which reads none): 'r' adds the
-// residual, 'g' multiplies silu(gate) from the gate scratch.
-char epilogueSuffix(LinearEpilogue epilogue) noexcept {
-  return epilogue == LinearEpilogue::None ? 'a' : epilogue == LinearEpilogue::Residual ? 'r' : 'g';
+// residual, 'g' multiplies silu(gate) from the gate scratch, 'G' gelu(gate).
+char epilogueSuffix(LinearEpilogue epilogue, bool geluGate = false) noexcept {
+  if (epilogue == LinearEpilogue::None) return 'a';
+  if (epilogue == LinearEpilogue::Residual) return 'r';
+  return geluGate ? 'G' : 'g';
 }
 const metal::MetalBuffer &epilogueInput(const LinearBuffers &b, LinearEpilogue epilogue) noexcept {
   return epilogue == LinearEpilogue::Residual ? b.residual
@@ -101,15 +103,15 @@ GgufDecodeFusedParams fusedSegments(const LinearPlan &plan, std::span<const Quan
 // value, any other epilogue in one dispatch.
 template <class Tensor>
 void addDecodeTensor(const LinearBuffers &b, LinearEpilogue epilogue, const QuantizedSegment &segment,
-                     const Projection *gate, const Tensor &tensor) {
+                     const Projection *gate, const Tensor &tensor, bool geluGate = false) {
   if (epilogue != LinearEpilogue::GateUp) {
-    tensor(segment, epilogueSuffix(epilogue), b.output, epilogueInput(b, epilogue));
+    tensor(segment, epilogueSuffix(epilogue, geluGate), b.output, epilogueInput(b, epilogue));
     return;
   }
   const std::vector<QuantizedSegment> &gates = gate->blocks().segments;
   if (gates.size() != 1) throw std::invalid_argument("block gate/up takes single tensors");
   tensor(gates.front(), epilogueSuffix(LinearEpilogue::None), b.gateScratch, b.gateScratch);
-  tensor(segment, epilogueSuffix(LinearEpilogue::UpWithGate), b.output, b.gateScratch);
+  tensor(segment, epilogueSuffix(LinearEpilogue::UpWithGate, geluGate), b.output, b.gateScratch);
 }
 
 // The gate and up tensors of a one-pass gate/up: single tensors of one format.
@@ -342,12 +344,12 @@ void Linear::addGgufStaged(metal::CommandGraph &graph, const LinearBuffers &b,
       return;
     }
     for (const QuantizedSegment &s : segments)
-      tensor(s, epilogueSuffix(w.epilogue), b.output, epilogueInput(b, w.epilogue));
+      tensor(s, epilogueSuffix(w.epilogue, w.geluGate), b.output, epilogueInput(b, w.epilogue));
     return;
   }
   if (config.oneGateUpPass) {
     const auto [g, u] = onePassTensors(p, *gate);
-    graph.add(decodeKernel(config.decodeInt8, u.name(), rows, "gate_up"),
+    graph.add(decodeKernel(config.decodeInt8, u.name(), rows, w.geluGate ? "gate_up_gelu" : "gate_up"),
               {b.input, g.plane0, g.plane1Slot(), g.meta, u.plane0, u.plane1Slot(), u.meta, b.output, partials,
                counters},
               GgufDecodeParams{k, splits, n, u.columnOffset, config.spread},
@@ -355,7 +357,7 @@ void Linear::addGgufStaged(metal::CommandGraph &graph, const LinearBuffers &b,
     return;
   }
   if (segments.size() == 1) {
-    addDecodeTensor(b, w.epilogue, segments.front(), gate, tensor);
+    addDecodeTensor(b, w.epilogue, segments.front(), gate, tensor, w.geluGate);
     return;
   }
   fused();
@@ -372,7 +374,7 @@ void Linear::addGgufPrefill(metal::CommandGraph &graph, const LinearBuffers &b,
                             const Projection &p, const LinearPlan &plan) const {
   const LinearWorkload w = plan.workload();
   const auto [n, k] = w.matrix;
-  const char epilogue = epilogueSuffix(w.epilogue);
+  const char epilogue = epilogueSuffix(w.epilogue, w.geluGate);
   const uint32_t rowTiles = plan.storageRows() / GGUF_PREFILL_ROWS;
   if (w.epilogue == LinearEpilogue::None && !p.planeInputs()) {
     const std::vector<QuantizedSegment> &segments = p.blocks().segments;
@@ -436,7 +438,7 @@ void Linear::addGgufPrefillInt8(metal::CommandGraph &graph, const LinearBuffers 
               GgufPrefillInt8QuantizeParams{k, w.rows, storage},
               {(groups + GGUF_PREFILL_INT8_QUANTIZE_SIMDGROUPS - 1) / GGUF_PREFILL_INT8_QUANTIZE_SIMDGROUPS, w.rows, 1},
               {GGUF_PREFILL_INT8_QUANTIZE_SIMDGROUPS * 32, 1, 1});
-  const std::string epilogue(1, epilogueSuffix(w.epilogue));
+  const std::string epilogue(1, epilogueSuffix(w.epilogue, w.geluGate));
   for (const QuantizedSegment &s : p.blocks().segments) {
     const uint32_t columnTiles = s.outputSize / GGUF_TILE_COLUMNS;
     graph.add(std::string("gguf_prefill_int8_") + s.name() + "_" + epilogue,
@@ -492,7 +494,7 @@ void Linear::addGgufRegister(metal::CommandGraph &graph, const LinearBuffers &b,
               {b.scratch.input, b.scratch.sums, s.plane0, s.plane1Slot(), s.meta, output, partials, counters, aux},
               GgufDecodeParams{k, config.splits, n, s.columnOffset, 0}, grid, {GGUF_REGISTER_THREADS, 1, 1});
   };
-  addDecodeTensor(b, w.epilogue, segments.front(), gate, tensor);
+  addDecodeTensor(b, w.epilogue, segments.front(), gate, tensor, w.geluGate);
 }
 
 // Float segments of a projection (QuantizedSegment::isFloat): a float projection

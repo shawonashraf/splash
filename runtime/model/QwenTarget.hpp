@@ -144,10 +144,12 @@ struct QwenTargetGeometry final : QwenTargetDimensions {
   // the RoPE of the target's pairs unless unrotatedLayers names it, and over
   // the window of kvLayout where that names it.
   [[nodiscard]] constexpr ops::AttentionVariant attentionVariant(uint32_t attention) const noexcept {
+    const bool global = attentionLayout(attention).headDimension != kvLayout.headDimension;
     return {.rotated = attention >= 64 || !(unrotatedLayers >> attention & 1),
             .windowTokens = kvLayout.windowed(attention) ? kvLayout.windowTokens : 0,
             .valueNorm = valueNormed,
-            .sharedKv = valueNormed && !kvLayout.windowed(attention)};
+            .sharedKv = valueNormed && !kvLayout.windowed(attention),
+            .partialRotary = global && globalPartialRotaryFactor < 1.0F};
   }
   // The KV geometry attention layer `attention` reads and stores with: the
   // pages' own, or the global geometry's for a dual-geometry target's
@@ -167,7 +169,12 @@ struct QwenTargetGeometry final : QwenTargetDimensions {
     return attentionLayout(attention).headDimension;
   }
   [[nodiscard]] constexpr uint32_t layerRotaryPairs(uint32_t attention) const noexcept {
-    return attentionLayout(attention).headDimension / 2;
+    const uint32_t headDimension = attentionLayout(attention).headDimension;
+    // A dual-geometry target's global heads rotate only their leading
+    // globalPartialRotaryFactor's worth of pairs (Gemma4's proportional RoPE).
+    if (headDimension != kvLayout.headDimension && globalPartialRotaryFactor < 1.0F)
+      return static_cast<uint32_t>(headDimension / 2 * globalPartialRotaryFactor);
+    return headDimension / 2;
   }
   // The widest the target's attention gets, for the arenas' sizing: the head
   // width, the query width, the packed projection's width and the KV width of

@@ -162,6 +162,11 @@ class ChatTemplate:
     # (_generation_key), for each reasoning effort; absent where it is empty
     # or the probes disagree.
     generation_prompts: dict
+    # The same after a conversation that ends with a tool result or call, as
+    # Gemma4's template appends less there (its thought channel's open, or
+    # nothing, where the model's turn stays open); ("", ()) where the probes
+    # agree it appends nothing.
+    tool_prompts: dict
     # The same for other options, probed on first use.
     probe: Callable
     # What the reasoning efforts do to a question's prompt, and the listed
@@ -179,12 +184,14 @@ class ChatTemplate:
             message["role"] != "system" for message in messages[1:]
         )
 
-    def generation_prompt(self, options):
+    def generation_prompt(self, options, trailing="turn"):
         """The text and tokens add_generation_prompt appends under these
-        request options; empty where the probe found none."""
+        request options; empty where the probe found none. `trailing` is
+        "tool" where the conversation ends with a tool result or call."""
         key = _generation_key(options)
-        found = self.generation_prompts.get(key)
-        return found if found is not None else self.probe(key)
+        prompts = self.tool_prompts if trailing == "tool" else self.generation_prompts
+        found = prompts.get(key)
+        return found if found is not None else self.probe(key, trailing)
 
 
 class ChatTemplates:
@@ -293,19 +300,24 @@ def _prepare(render, encode, source, think_end):
     probed = LRUCache(_PROBED_OPTIONS_BYTES, _PROBED_OPTIONS)
     lock = threading.Lock()
 
-    def probe(key):
+    def probe(key, trailing="turn"):
         def generation_prompt():
             options = {**json.loads(key), "add_generation_prompt": True}
-            found = _generation_prompt(render, encode, source, options) or ("", ())
-            return found, _probed_bytes(key, found)
+            found = (
+                _generation_prompt(render, encode, source, options, trailing)
+                or ("", ())
+            )
+            return found, _probed_bytes(key + trailing, found)
 
-        return memoized(probed, lock, key, generation_prompt)
+        return memoized(probed, lock, key + "\x00" + trailing, generation_prompt)
 
+    prompts, tool_prompts = _generation_prompts(render, encode, source)
     return ChatTemplate(
         source,
         later_system,
         original,
-        _generation_prompts(render, encode, source),
+        prompts,
+        tool_prompts,
         probe,
         *_reasoning(render, source),
         _thinking_end(render, source, think_end),
@@ -407,9 +419,20 @@ _OPTIONS = (
 )
 
 
-# Conversations the generation prompt must be the same for: a question, a
-# follow-up after a reasoned answer, and a tool result.
-_FOLLOWED = ([_ASK], [_SYSTEM, _ASK, _THOUGHT, _NEXT], [_SYSTEM, _ASK, _CALL, _RESULT])
+# Conversations the generation prompt must be the same for, by how they end:
+# a question or a follow-up after a reasoned answer ("turn"), and a tool
+# result ("tool"), where Gemma4's template appends less.
+_FOLLOWED_TURN = ([_ASK], [_SYSTEM, _ASK, _THOUGHT, _NEXT])
+_FOLLOWED_TOOL = ([_SYSTEM, _ASK, _CALL, _RESULT],)
+
+
+def trailing_kind(messages):
+    """How a conversation ends: "tool" after a tool result or a call awaiting
+    one, "turn" otherwise."""
+    last = messages[-1]
+    if last["role"] == "tool" or (last["role"] == "assistant" and last.get("tool_calls")):
+        return "tool"
+    return "turn"
 
 
 def _generation_key(options):
@@ -473,21 +496,27 @@ def _reasoning(render, source):
 
 
 def _generation_prompts(render, encode, source):
-    """The generation prompt for each reasoning effort a request can pass."""
-    prompts = {}
+    """The generation prompt for each reasoning effort a request can pass,
+    for conversations ending in a turn and, separately, in a tool result."""
+    prompts, tool_prompts = {}, {}
     for effort in (None, *REASONING_EFFORTS):
         options = _effort_options(effort)
-        if found := _generation_prompt(render, encode, source, options):
+        if found := _generation_prompt(render, encode, source, options, "turn"):
             prompts[_generation_key(options)] = found
-    return prompts
+        tool_prompts[_generation_key(options)] = _generation_prompt(
+            render, encode, source, options, "tool"
+        )
+    return prompts, tool_prompts
 
 
-def _generation_prompt(render, encode, source, options):
+def _generation_prompt(render, encode, source, options, trailing="turn"):
     """What add_generation_prompt appends under these options, with its
     tokens: kept where every probe conversation renders as a prefix of its
-    prompt and gains the same non-empty text."""
+    prompt and gains the same text — non-empty after a turn, empty allowed
+    after a tool result, where a template may leave the model's turn open."""
+    conversations = _FOLLOWED_TOOL if trailing == "tool" else _FOLLOWED_TURN
     texts = set()
-    for messages in _FOLLOWED:
+    for messages in conversations:
         prompt = _outcome(render, source, messages, options)
         history = _outcome(
             render, source, messages, {**options, "add_generation_prompt": False}
@@ -501,6 +530,8 @@ def _generation_prompt(render, encode, source, options):
         texts.add(prompt[len(history) :])
     if len(texts) == 1 and (text := texts.pop()):
         return text, tuple(encode(text))
+    if trailing == "tool" and texts == {""}:
+        return "", ()
     return None
 
 

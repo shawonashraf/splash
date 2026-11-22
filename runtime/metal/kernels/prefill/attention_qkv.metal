@@ -71,6 +71,11 @@ PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm, 32, 16, 256, 128
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv16_g2_d256_vnorm_f32, 32, 16, 256, 128, false, float, true, false)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv, 32, 4, 512, 256, false, bfloat, true, true)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_vnorm_sharedkv_f32, 32, 4, 512, 256, false, float, true, true)
+// Gemma4's global layers rotate only the leading 64 pairs of their 512-wide heads (partial_rotary_factor 0.25).
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_p64, 32, 4, 512, 64, false, bfloat, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_p64_f32, 32, 4, 512, 64, false, float, false, false)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_p64_vnorm_sharedkv, 32, 4, 512, 64, false, bfloat, true, true)
+PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv4_g8_d512_p64_vnorm_sharedkv_f32, 32, 4, 512, 64, false, float, true, true)
 PREFILL_ATTENTION_QKV(prefill_attention_qkv_kv2_g16_f32, 32, 2, 256, 32, true, float, false, false)
 // Four KV heads of 128 dimensions without an output gate, their whole heads
 // rotated (64 pairs) or unrotated.
@@ -120,4 +125,5 @@ PREFILL_ATTENTION_GATE(prefill_attention_gate_kv2_g16, 32, 2, 256)
 PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv4_g8_d128, 32, 4, 128)
 PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv16_g2_d256, 32, 16, 256)
 PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv4_g8_d512, 32, 4, 512)
+PREFILL_ATTENTION_GATHER(prefill_attention_gather_kv4_g8_d512_p64, 32, 4, 512)
 #undef PREFILL_ATTENTION_GATHER

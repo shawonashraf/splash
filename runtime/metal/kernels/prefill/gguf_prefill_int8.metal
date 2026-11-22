@@ -211,7 +211,7 @@ inline void prefill_int8_tile(device const char *codes, device const float2 *sca
   }
 #define GGUF_PREFILL_INT8_FORMAT(B, f)                                                                                 \
   GGUF_PREFILL_INT8_KERNEL(B, f, a, EpNone) GGUF_PREFILL_INT8_KERNEL(B, f, r, EpResidual)                              \
-  GGUF_PREFILL_INT8_KERNEL(B, f, g, EpUpWithGate)
+  GGUF_PREFILL_INT8_KERNEL(B, f, g, EpUpWithGate) GGUF_PREFILL_INT8_KERNEL(B, f, G, EpUpWithGelu)
 GGUF_PREFILL_INT8_FORMAT(4, af4g64)
 GGUF_PREFILL_INT8_FORMAT(5, af5g64)
 #undef GGUF_PREFILL_INT8_FORMAT

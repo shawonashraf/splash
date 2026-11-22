@@ -64,6 +64,9 @@ struct CompiledAttention final {
   uint32_t windowTokens;
   std::string_view suffix;
   std::string_view storeSuffix;
+  // Whether rotaryPairs is a partial count of the head's pairs (Gemma4's
+  // global layers' 64 of 256), which the variant selects.
+  bool partialRotary = false;
 };
 constexpr std::array kCompiledAttention{
     CompiledAttention{24, 4, 256, kv::Reads::EveryPage, true, false, 32, false, 0, "", ""},
@@ -82,6 +85,10 @@ constexpr std::array kCompiledAttention{
     // whole history, whole-head RoPE (256 pairs).
     CompiledAttention{32, 4, 512, kv::Reads::EveryPage, false, false, 256, false, 0, "_kv4_g8_d512",
                       "_kv4_d512"},
+    // Gemma4's global layers with their partial RoPE (partial_rotary_factor
+    // 0.25): the leading 64 of the 512-wide heads' 256 pairs rotate.
+    CompiledAttention{32, 4, 512, kv::Reads::EveryPage, false, false, 64, false, 0, "_kv4_g8_d512_p64",
+                      "_kv4_d512", true},
 };
 
 // Whether a compiled geometry's pages are a layout's: its KV heads, head
@@ -108,6 +115,8 @@ const CompiledAttention &compiledAttention(uint32_t queryHeads, kv::Layout layou
   static_cast<void>(storeSuffix(layout));
   for (const CompiledAttention &compiled : kCompiledAttention) {
     if (compiled.queryHeads != queryHeads || compiled.reads != layout.reads || !storesLayout(compiled, layout))
+      continue;
+    if (compiled.partialRotary != variant.partialRotary)
       continue;
     if ((!variant.rotated && !compiled.unrotated) ||
         (variant.windowTokens && variant.windowTokens != compiled.windowTokens))
@@ -409,8 +418,9 @@ AttentionWorkspace PagedAttention::verifyWorkspace(
   return verifyWorkspaceBound(lanes, queryHeads, layout, headDimension);
 }
 
-bool PagedAttention::compiles(uint32_t queryHeads, kv::Layout layout, bool gated, uint32_t rotaryPairs) {
-  const CompiledAttention &compiled = compiledAttention(queryHeads, layout);
+bool PagedAttention::compiles(uint32_t queryHeads, kv::Layout layout, bool gated, uint32_t rotaryPairs,
+                              AttentionVariant variant) {
+  const CompiledAttention &compiled = compiledAttention(queryHeads, layout, variant);
   return compiled.gated == gated && compiled.rotaryPairs == rotaryPairs;
 }
 

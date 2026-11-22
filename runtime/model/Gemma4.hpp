@@ -72,6 +72,10 @@ struct Gemma4Layout final : QwenHybridLayout {
                           .dualAttentionGeometry = true,
                           .valueNormed = true,
                           .logitSoftcapping = 30.0F,
+                          .embeddingScale = 73.32495807107999F,  // sqrt(5376)
+                          .postSublayerNorms = true,
+                          .geluFfn = true,
+                          .globalPartialRotaryFactor = 0.25F,
                           .maskToken = 4,
                           .stopTokens = {106},
                           .ffnKind = QwenFfnKind::Dense,

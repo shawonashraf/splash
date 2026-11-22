@@ -37,4 +37,16 @@ PreparedInput Normalization::addRms(metal::CommandGraph &graph,
   return {};
 }
 
+void Normalization::addRmsResidual(metal::CommandGraph &graph, metal::MetalBuffer input,
+                                   const NormWeights &weight, metal::MetalBuffer residual,
+                                   metal::MetalBuffer output, uint32_t width, uint32_t rows) {
+  const uint64_t bytes = uint64_t{rows} * width * 2;
+  requireBytes(input, bytes, "residual norm input");
+  requireBytes(residual, bytes, "residual norm residual");
+  requireBytes(output, bytes, "residual norm output");
+  graph.add(normKernel("norm_rms_residual", weight, width),
+            {std::move(input), weight.buffer, std::move(residual), std::move(output)},
+            width, {rows, 1, 1});
+}
+
 } // namespace splash::ops

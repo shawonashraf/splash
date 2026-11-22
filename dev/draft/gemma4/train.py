@@ -230,6 +230,7 @@ def main():
     ap.add_argument("--selector-alpha", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save-every", type=int, default=250)
+    ap.add_argument("--resume", default=None)
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -255,6 +256,12 @@ def main():
 
     model = Draft(k_layers).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    start_step = 1
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        model.load_state_dict(ckpt["state"])
+        start_step = int(args.resume.rsplit("-", 1)[1].split(".")[0]) + 1
+        print(f"resumed from {args.resume} at step {start_step}", flush=True)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -265,15 +272,16 @@ def main():
     w = torch.tensor([args.gamma ** (-j) for j in range(BLOCK)], device=device, dtype=torch.float32)
     w = w / w.sum() * BLOCK
 
-    for step in range(1, args.steps + 1):
+    for step in range(start_step, args.steps + 1):
         opt.zero_grad()
         loss_sum = 0.0
         for _ in range(args.batch):
             si = int(rng.integers(0, len(seq_starts)))
             lo, hi = int(seq_starts[si]), int(seq_ends[si]) - BLOCK - 1
+            hi = min(hi, total - BLOCK - 1)
             if hi <= lo + 1:
                 continue
-            t = int(rng.integers(lo + 1, hi))
+            t = int(rng.integers(lo + 1, hi + 1))
             ctx_len = min(t - lo, args.ctx)
             ctx_pos = torch.arange(t - ctx_len, t, device=device)
             block_pos = torch.arange(t, t + BLOCK, device=device)

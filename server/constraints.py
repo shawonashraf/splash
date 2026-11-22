@@ -193,7 +193,9 @@ def check_capabilities(tokenizer, chat_format, ready):
             f"the tokenizer encodes the stop texts {chat_format.stop_tokens} as "
             f"tokens {stops}, but the native model stops at {ready.stop_token_ids}"
         )
-    if tokenizer.eos_token_id not in ready.stop_token_ids:
+    eos = tokenizer.eos_token_id
+    eos_ids = eos if isinstance(eos, list) else [eos]
+    if not any(eos_id in ready.stop_token_ids for eos_id in eos_ids):
         raise TokenizerContractError(
             "tokenizer EOS token does not match the native model"
         )

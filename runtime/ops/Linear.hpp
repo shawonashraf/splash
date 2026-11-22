@@ -110,6 +110,8 @@ struct LinearWorkload final {
   uint32_t rows = 0;
   LinearPhase phase = LinearPhase::Decode;
   LinearEpilogue epilogue = LinearEpilogue::None;
+  // A gate/up epilogue gates with GELU (tanh) instead of SiLU, as Gemma4's FFN.
+  bool geluGate = false;
   auto operator<=>(const LinearWorkload &) const = default;
 };
 
@@ -279,10 +281,11 @@ public:
   // staged height of its own rows, which compute each row as the chunk's plan
   // does.
   [[nodiscard]] LinearPlan prefillPlan(const Projection &projection, uint32_t rows,
-                                       LinearEpilogue epilogue, uint32_t chunkRows = 0) const;
+                                       LinearEpilogue epilogue, uint32_t chunkRows = 0,
+                                       bool geluGate = false) const;
   [[nodiscard]] LinearPlan decodePlan(const Projection &projection, uint32_t lanes,
                                       LinearEpilogue epilogue = LinearEpilogue::None,
-                                      const Projection *gate = nullptr) const;
+                                      const Projection *gate = nullptr, bool geluGate = false) const;
   // The scratch of every decode plan of a projection of `shape`: each lane
   // count, the None, Residual and GateUp epilogues and every tile the device
   // may run them on, and the rotated rows of a full decode batch.
@@ -317,11 +320,12 @@ public:
   void addPrefillResidual(metal::CommandGraph &graph, metal::MetalBuffer input, const Projection &projection,
                           metal::MetalBuffer residual, metal::MetalBuffer output, uint32_t rows,
                           LinearScratch scratch, uint32_t chunkRows = 0) const;
-  // output = residual + down(silu(gate x) * up x) of `rows` normalized rows;
-  // up takes what gate's plan leaves of x in the scratch table.
+  // output = residual + down(gate-activation(gate x) * up x) of `rows`
+  // normalized rows, silu unless `geluGate`; up takes what gate's plan leaves
+  // of x in the scratch table.
   void addPrefillSwiGlu(metal::CommandGraph &graph, const SwiGluProjections &ffn, const PrefillFfnBuffers &buffers,
                         metal::MetalBuffer residual, metal::MetalBuffer output, uint32_t rows,
-                        uint32_t chunkRows = 0) const;
+                        uint32_t chunkRows = 0, bool geluGate = false) const;
 
 private:
   // The partials and counters a dispatch of `splits` K partitions binds: the
