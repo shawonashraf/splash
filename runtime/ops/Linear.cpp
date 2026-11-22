@@ -288,7 +288,10 @@ void Linear::addPrefillSwiGlu(metal::CommandGraph &graph, const SwiGluProjection
       {.input = b.normalized, .output = b.intermediate, .gateScratch = b.gateScratch, .scratch = b.scratch,
        .prepared = normalized},
       *ffn.up, prefillPlan(*ffn.up, rows, LinearEpilogue::UpWithGate, chunkRows, geluGate));
-  addPrefillResidual(graph, b.intermediate, *ffn.down, residual, output, rows, b.scratch, chunkRows);
+  if (residual)
+    addPrefillResidual(graph, b.intermediate, *ffn.down, residual, output, rows, b.scratch, chunkRows);
+  else
+    addPrefill(graph, b.intermediate, *ffn.down, output, rows, b.scratch, chunkRows);
 }
 
 } // namespace splash::ops

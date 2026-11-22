@@ -704,8 +704,8 @@ private:
     if (step.aneFfn && step.readRows.empty())
       step.aneFfn->add(step.graph, index, buffers, b.normalized, ffnOut, rows);
     else if (const std::optional<ops::SwiGluProjections> dense = denseFfn(layer))
-      operators_.linear().addPrefillSwiGlu(step.graph, *dense, buffers, b.normalized, ffnOut, rows, step.rows,
-                                           geometry_.geluFfn);
+      operators_.linear().addPrefillSwiGlu(step.graph, *dense, buffers, metal::MetalBuffer{}, ffnOut, rows,
+                                           step.rows, geometry_.geluFfn);
     else
       throw std::logic_error("a post-sublayer-norm layer without a dense FFN");
     ops::Normalization::addRmsResidual(step.graph, ffnOut, layer.postFfnNorm, output, output,

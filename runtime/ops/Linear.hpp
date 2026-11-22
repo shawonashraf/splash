@@ -321,8 +321,9 @@ public:
                           metal::MetalBuffer residual, metal::MetalBuffer output, uint32_t rows,
                           LinearScratch scratch, uint32_t chunkRows = 0) const;
   // output = residual + down(gate-activation(gate x) * up x) of `rows`
-  // normalized rows, silu unless `geluGate`; up takes what gate's plan leaves
-  // of x in the scratch table.
+  // normalized rows, silu unless `geluGate`, or down(...) alone when
+  // `residual` is empty; up takes what gate's plan leaves of x in the scratch
+  // table.
   void addPrefillSwiGlu(metal::CommandGraph &graph, const SwiGluProjections &ffn, const PrefillFfnBuffers &buffers,
                         metal::MetalBuffer residual, metal::MetalBuffer output, uint32_t rows,
                         uint32_t chunkRows = 0, bool geluGate = false) const;
