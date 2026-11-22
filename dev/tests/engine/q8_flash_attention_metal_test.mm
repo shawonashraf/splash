@@ -85,6 +85,10 @@ private:
 const std::vector<Shape> kShapes = [] {
   std::vector<Shape> shapes;
   for (const splash::test::AttentionGeometry &geometry : splash::test::familyAttentionGeometries()) {
+    // The oracle page (Q8PageFormatReference.hpp) holds kKvHeads heads; a
+    // geometry of more (Gemma4's sliding layers' 16, covered against an fp64
+    // reference in paged_attention_plan_test) is not this test's.
+    if (geometry.kvHeads > kKvHeads) continue;
     shapes.push_back({geometry.kvHeads, geometry.queryHeads / geometry.kvHeads, geometry.reads});
     if (geometry.reads == splash::kv::Reads::EveryPage)
       shapes.push_back({geometry.kvHeads, geometry.queryHeads / geometry.kvHeads, geometry.reads, true});
