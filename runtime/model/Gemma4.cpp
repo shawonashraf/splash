@@ -105,6 +105,11 @@ Gemma4Weights loadGemma4Weights(metal::MetalBackend &backend, Gemma4Layout layou
         {
           WeightFile file = gguf.head();
           result.finalNorm = format.norm(file, layout.hiddenSize, "final-norm");
+          // The GGUF's rope frequency table: the runtime builds its own from
+          // the metadata's rope bases, so the head's section is consumed, not
+          // read into a buffer.
+          [[maybe_unused]] const metal::MetalBuffer ropeFreqs =
+              file.section(uint64_t{layout.attentionHeadDimension} * kFloat32Bytes, "rope-freqs");
           file.finish();
           result.files.push_back(file.record());
         }
