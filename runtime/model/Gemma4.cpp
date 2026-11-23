@@ -12,16 +12,17 @@ namespace splash::model {
 namespace {
 
 float bf16ToFloat(uint16_t bits) {
-  _Float16 value;
-  std::memcpy(&value, &bits, 2);
-  return static_cast<float>(value);
+  const uint32_t widened = uint32_t{bits} << 16;
+  float value;
+  std::memcpy(&value, &widened, 4);
+  return value;
 }
 
 uint16_t floatToBf16(float value) {
-  const _Float16 narrow = value;
-  uint16_t bits;
-  std::memcpy(&bits, &narrow, 2);
-  return bits;
+  uint32_t bits;
+  std::memcpy(&bits, &value, 4);
+  bits += 0x7FFFu + (bits >> 16 & 1u);
+  return uint16_t(bits >> 16);
 }
 
 // The norm's weights times `factor`, in a fresh buffer: Gemma4's attention
